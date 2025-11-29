@@ -159,3 +159,26 @@ The tool must accept arguments/config for:
 | Hash Algorithm     | Checksum algorithm to use                    | `--checksum sha256`    |
 | Mirror Mode        | Enable deletion of extra files (default: off)| `--delete-extras`      |
 | Rescan             | Force database update                        |                        |
+
+---
+
+## 6. Quality Assurance & Tooling
+
+### 6.1. Automated Testing
+- The project must include **automated integration tests** to verify core functionality, including:
+  - Full synchronization flow.
+  - File skipping logic.
+  - File truncation/update handling.
+  - Mirroring/Cleanup functionality.
+  - Bandwidth limiting enforcement.
+
+### 6.2. Code Coverage
+- The project must include tooling to measure and report **code coverage**.
+- A script (e.g., `coverage.sh`) must be provided to easily generate these reports.
+
+### 6.3. Verification
+- A standalone verification script (e.g., `verify.sh`) must be provided to demonstrate the tool's functionality in a clean environment, performing:
+  - Setup of test data.
+  - Execution of the sync tool.
+  - Validation of transferred files (existence and content).
+  - Validation of database and log file creation.

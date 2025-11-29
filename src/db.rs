@@ -58,7 +58,6 @@ impl Database {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub fn get_file_hash(&self, source_path: &str) -> Result<Option<String>> {
         let mut stmt = self
             .conn

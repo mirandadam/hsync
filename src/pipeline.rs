@@ -129,7 +129,7 @@ pub fn run_producer(
         let mtime = FileTime::from_last_modification_time(&metadata).unix_seconds();
         let atime = FileTime::from_last_access_time(&metadata).unix_seconds();
         // ctime is not standard in std::fs::Metadata on all platforms, using mtime as fallback or 0 if not available easily without platform specific ext
-        // For PoC, we'll use mtime for ctime or 0.
+        // We'll use mtime for ctime or 0 if not available.
         let ctime = mtime;
 
         // Unix permissions

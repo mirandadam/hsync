@@ -1,6 +1,6 @@
 # hsync: High-Volume Streaming Sync Tool
 
-A proof-of-concept application designed to reliably migrate large datasets between network-mounted storage systems (NFS/SMB).
+A high-performance application designed to reliably migrate large datasets between network-mounted storage systems (NFS/SMB).
 
 ## Features
 
@@ -8,6 +8,7 @@ A proof-of-concept application designed to reliably migrate large datasets betwe
 - **Resumable**: Uses a local SQLite database to track file state, enabling immediate startup and efficient resumption.
 - **Bandwidth Limiting**: Configurable transfer speed limit.
 - **Integrity**: On-the-fly checksum calculation and metadata synchronization (mtime, atime).
+- **Mirroring**: Optional cleanup of extra files at the destination (with safety checks).
 
 ## Usage
 

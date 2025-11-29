@@ -58,6 +58,7 @@ impl Database {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn get_file_hash(&self, source_path: &str) -> Result<Option<String>> {
         let mut stmt = self
             .conn
@@ -69,5 +70,48 @@ impl Database {
         } else {
             Ok(None)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_db_init_and_ops() -> Result<()> {
+        let db = Database::new(":memory:")?;
+
+        db.upsert_file_state(
+            "/src/file1",
+            "/dest/file1",
+            100,
+            200,
+            300,
+            0o644,
+            Some("abc123hash"),
+            1024,
+        )?;
+
+        let hash = db.get_file_hash("/src/file1")?;
+        assert_eq!(hash, Some("abc123hash".to_string()));
+
+        let missing = db.get_file_hash("/src/missing")?;
+        assert_eq!(missing, None);
+
+        // Update
+        db.upsert_file_state(
+            "/src/file1",
+            "/dest/file1",
+            100,
+            200,
+            300,
+            0o644,
+            Some("newhash"),
+            1024,
+        )?;
+        let new_hash = db.get_file_hash("/src/file1")?;
+        assert_eq!(new_hash, Some("newhash".to_string()));
+
+        Ok(())
     }
 }

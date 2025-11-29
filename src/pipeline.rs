@@ -1,17 +1,28 @@
 use crate::db::Database;
 use crate::utils::Logger;
 use anyhow::{Context, Result};
+use clap::ValueEnum;
 use crossbeam_channel::{Receiver, Sender};
 use filetime::{set_file_times, FileTime};
+use indicatif::{ProgressBar, ProgressStyle};
+use md5::Md5;
+use sha1::Sha1;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 use walkdir::WalkDir;
 
 pub const BLOCK_SIZE: usize = 5 * 1024 * 1024; // 5MB
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum HashAlgorithm {
+    Md5,
+    Sha1,
+    Sha256,
+}
 
 #[derive(Debug)]
 pub struct Block {
@@ -28,12 +39,60 @@ pub struct Block {
     pub file_size: u64,
 }
 
+#[derive(Clone)]
 pub struct PipelineConfig {
     pub source_dir: PathBuf,
     pub dest_dir: PathBuf,
     pub bw_limit: Option<u64>, // bytes per second
+    #[allow(dead_code)]
     pub db_path: String,
+    #[allow(dead_code)]
     pub log_path: String,
+    pub hash_algo: HashAlgorithm,
+    pub rescan: bool,
+}
+
+trait DynDigest: Send {
+    fn update(&mut self, data: &[u8]);
+    fn finalize_hex(&self) -> String;
+}
+
+struct Md5Wrapper(Md5);
+impl DynDigest for Md5Wrapper {
+    fn update(&mut self, data: &[u8]) {
+        self.0.update(data);
+    }
+    fn finalize_hex(&self) -> String {
+        hex::encode(self.0.clone().finalize())
+    }
+}
+
+struct Sha1Wrapper(Sha1);
+impl DynDigest for Sha1Wrapper {
+    fn update(&mut self, data: &[u8]) {
+        self.0.update(data);
+    }
+    fn finalize_hex(&self) -> String {
+        hex::encode(self.0.clone().finalize())
+    }
+}
+
+struct Sha256Wrapper(Sha256);
+impl DynDigest for Sha256Wrapper {
+    fn update(&mut self, data: &[u8]) {
+        self.0.update(data);
+    }
+    fn finalize_hex(&self) -> String {
+        hex::encode(self.0.clone().finalize())
+    }
+}
+
+fn create_hasher(algo: HashAlgorithm) -> Box<dyn DynDigest> {
+    match algo {
+        HashAlgorithm::Md5 => Box::new(Md5Wrapper(Md5::new())),
+        HashAlgorithm::Sha1 => Box::new(Sha1Wrapper(Sha1::new())),
+        HashAlgorithm::Sha256 => Box::new(Sha256Wrapper(Sha256::new())),
+    }
 }
 
 pub fn run_producer(
@@ -44,6 +103,17 @@ pub fn run_producer(
 ) -> Result<()> {
     let start_time = Instant::now();
     let mut total_bytes_sent = 0u64;
+
+    // Count total files and size for progress bar (optional but nice)
+    // For now, we'll just use a spinner or simple progress since walking twice is expensive on 200TB
+    // But we can track total bytes transferred.
+
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.green} [{elapsed_precise}] {msg} ({bytes}/s)")?,
+    );
+    pb.set_message("Scanning...");
 
     for entry in WalkDir::new(&config.source_dir) {
         let entry = entry?;
@@ -71,7 +141,7 @@ pub fn run_producer(
         let size = metadata.len();
 
         // Skipping Logic
-        if dest_path.exists() {
+        if !config.rescan && dest_path.exists() {
             if let Ok(dest_meta) = fs::metadata(&dest_path) {
                 let dest_mtime = FileTime::from_last_modification_time(&dest_meta).unix_seconds();
                 if dest_mtime == mtime {
@@ -95,14 +165,32 @@ pub fn run_producer(
         }
 
         // Process File
+        pb.set_message(format!("Processing: {:?}", relative_path));
         let mut file = File::open(source_path)?;
-        let mut hasher = Sha256::new();
+        let mut hasher = create_hasher(config.hash_algo);
         let mut offset = 0u64;
         let mut buffer = vec![0u8; BLOCK_SIZE];
 
         loop {
             let bytes_read = file.read(&mut buffer)?;
             if bytes_read == 0 {
+                // Handle empty file case
+                if size == 0 {
+                    let block = Block {
+                        data: vec![],
+                        offset: 0,
+                        dest_path: dest_path.clone(),
+                        source_path: source_path.to_path_buf(),
+                        atime,
+                        mtime,
+                        ctime,
+                        permissions,
+                        is_last_block: true,
+                        file_hash: Some(hasher.finalize_hex()),
+                        file_size: 0,
+                    };
+                    sender.send(block).context("Failed to send block")?;
+                }
                 break;
             }
 
@@ -115,14 +203,18 @@ pub fn run_producer(
                 if expected_duration > elapsed {
                     thread::sleep(expected_duration - elapsed);
                 }
+            } else {
+                total_bytes_sent += bytes_read as u64;
             }
+
+            pb.set_position(total_bytes_sent);
 
             let chunk_data = buffer[0..bytes_read].to_vec();
             hasher.update(&chunk_data);
 
             let is_last = (offset + bytes_read as u64) == size;
             let file_hash = if is_last {
-                Some(hex::encode(hasher.finalize_reset()))
+                Some(hasher.finalize_hex())
             } else {
                 None
             };
@@ -149,6 +241,7 @@ pub fn run_producer(
             }
         }
     }
+    pb.finish_with_message("Producer finished.");
     Ok(())
 }
 
@@ -162,10 +255,15 @@ pub fn run_consumer(
             fs::create_dir_all(parent)?;
         }
 
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .open(&block.dest_path)?;
+        let mut options = OpenOptions::new();
+        options.write(true).create(true);
+
+        // Truncate if writing from the beginning (new file or overwrite)
+        if block.offset == 0 {
+            options.truncate(true);
+        }
+
+        let mut file = options.open(&block.dest_path)?;
 
         file.seek(SeekFrom::Start(block.offset))?;
         file.write_all(&block.data)?;
@@ -196,13 +294,30 @@ pub fn run_consumer(
                 block.dest_path,
                 block.file_hash.as_deref().unwrap_or("?")
             ))?;
-
-            // Console output (simple)
-            println!(
-                "Finished: {:?}",
-                block.source_path.file_name().unwrap_or_default()
-            );
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_create_hasher() {
+        let mut h = create_hasher(HashAlgorithm::Md5);
+        h.update(b"hello");
+        assert_eq!(h.finalize_hex(), "5d41402abc4b2a76b9719d911017c592");
+
+        let mut h = create_hasher(HashAlgorithm::Sha1);
+        h.update(b"hello");
+        assert_eq!(h.finalize_hex(), "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d");
+
+        let mut h = create_hasher(HashAlgorithm::Sha256);
+        h.update(b"hello");
+        assert_eq!(
+            h.finalize_hex(),
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+    }
 }

@@ -1,6 +1,7 @@
 pub mod cleanup;
 pub mod db;
 pub mod pipeline;
+pub mod scan;
 pub mod utils;
 
 use anyhow::Result;
@@ -13,6 +14,7 @@ use std::thread;
 use cleanup::run_cleanup;
 use db::Database;
 use pipeline::{run_consumer, run_producer, Block, HashAlgorithm, PipelineConfig};
+use scan::run_scan;
 use utils::Logger;
 
 #[derive(Parser, Debug, Clone)]
@@ -46,7 +48,7 @@ pub struct Args {
     #[arg(long)]
     pub delete_extras: bool,
 
-    /// Force database update (rescan)
+    /// Force a full rescan, ignoring any existing backlog
     #[arg(long)]
     pub rescan: bool,
 }
@@ -55,6 +57,47 @@ pub fn run(args: Args) -> Result<()> {
     let db = Arc::new(Mutex::new(Database::new(&args.db)?));
     let logger = Arc::new(Logger::new(&args.log));
 
+    // Handle forced rescan: reset status but preserve hashes
+    if args.rescan {
+        println!("Forcing full rescan...");
+        let db_guard = db.lock().unwrap();
+        db_guard.reset_for_rescan()?;
+        drop(db_guard);
+    }
+
+    // Determine mode: resume from backlog or perform fresh scan
+    let pending_count = {
+        let db_guard = db.lock().unwrap();
+        db_guard.pending_count()?
+    };
+
+    if pending_count > 0 {
+        // Resume mode: backlog exists
+        println!("Resuming: {} files pending transfer.", pending_count);
+    } else {
+        // Scan mode: no backlog, perform full scan
+        println!("Scanning source and destination directories...");
+        let pending = run_scan(&args.source, &args.dest, &db)?;
+
+        if pending == 0 {
+            println!("All files are already synced.");
+            if args.delete_extras {
+                let config = PipelineConfig {
+                    source_dir: args.source.clone(),
+                    dest_dir: args.dest.clone(),
+                    bw_limit: args.bwlimit,
+                    db_path: args.db.clone(),
+                    log_path: args.log.clone(),
+                    hash_algo: args.checksum,
+                };
+                run_cleanup(&config, &logger)?;
+            }
+            println!("Sync completed.");
+            return Ok(());
+        }
+    }
+
+    // Transfer phase: process the backlog
     let (sender, receiver) = bounded::<Block>(20); // Fixed-size FIFO queue (20 slots)
 
     let config = PipelineConfig {
@@ -64,7 +107,6 @@ pub fn run(args: Args) -> Result<()> {
         db_path: args.db.clone(),
         log_path: args.log.clone(),
         hash_algo: args.checksum,
-        rescan: args.rescan,
     };
 
     let producer_db = db.clone();

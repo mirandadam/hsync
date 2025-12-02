@@ -13,7 +13,6 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
-use walkdir::WalkDir;
 
 pub const BLOCK_SIZE: usize = 5 * 1024 * 1024; // 5MB
 
@@ -49,7 +48,6 @@ pub struct PipelineConfig {
     #[allow(dead_code)]
     pub log_path: String,
     pub hash_algo: HashAlgorithm,
-    pub rescan: bool,
 }
 
 trait DynDigest: Send {
@@ -115,6 +113,7 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// Producer that reads files from the database backlog (pending files).
 pub fn run_producer(
     config: PipelineConfig,
     sender: Sender<Block>,
@@ -122,6 +121,21 @@ pub fn run_producer(
     logger: std::sync::Arc<Logger>,
 ) -> Result<()> {
     let mut total_bytes_sent = 0u64;
+    let mut files_transferred = 0u64;
+
+    // Get pending files from database
+    let pending_files = {
+        let db_guard = db.lock().unwrap();
+        db_guard.get_pending_files()?
+    };
+
+    let total_files = pending_files.len();
+    if total_files == 0 {
+        println!("No files to transfer.");
+        return Ok(());
+    }
+
+    println!("Transferring {} files...", total_files);
 
     // Per-file progress bar for ETA and bandwidth display
     let pb = ProgressBar::new(0);
@@ -131,64 +145,53 @@ pub fn run_producer(
             .progress_chars("=>-"),
     );
 
-    for entry in WalkDir::new(&config.source_dir) {
-        let entry = entry?;
-        if entry.file_type().is_dir() {
-            continue;
-        }
+    for file_record in pending_files {
+        let source_path = PathBuf::from(&file_record.source_path);
+        let dest_path = PathBuf::from(&file_record.dest_path);
 
-        let source_path = entry.path();
-        let relative_path = source_path.strip_prefix(&config.source_dir)?;
-        let dest_path = config.dest_dir.join(relative_path);
+        // Compute relative path for display
+        let relative_path = source_path
+            .strip_prefix(&config.source_dir)
+            .unwrap_or(&source_path);
 
-        let metadata = fs::metadata(source_path)?;
+        // Get fresh metadata from source (file may have changed since scan)
+        let metadata = match fs::metadata(&source_path) {
+            Ok(m) => m,
+            Err(e) => {
+                let _ = logger.log(&format!("Skipping (read error): {:?} - {}", source_path, e));
+                continue;
+            }
+        };
+
         let mtime = FileTime::from_last_modification_time(&metadata).unix_seconds();
         let atime = FileTime::from_last_access_time(&metadata).unix_seconds();
-        // ctime is not standard in std::fs::Metadata on all platforms, using mtime as fallback or 0 if not available easily without platform specific ext
-        // We'll use mtime for ctime or 0 if not available.
         let ctime = mtime;
+        let size = metadata.len();
 
-        // Unix permissions
         #[cfg(unix)]
         let permissions = std::os::unix::fs::MetadataExt::mode(&metadata);
         #[cfg(not(unix))]
-        let permissions = 0;
+        let permissions = 0u32;
 
-        let size = metadata.len();
-
-        // Skipping Logic
-        if !config.rescan && dest_path.exists() {
-            if let Ok(dest_meta) = fs::metadata(&dest_path) {
-                let dest_mtime = FileTime::from_last_modification_time(&dest_meta).unix_seconds();
-                if dest_mtime == mtime {
-                    // Skip
-                    let _ = logger.log(&format!("Skipping: {:?}", source_path));
-                    // Update DB with null hash
-                    let db_guard = db.lock().unwrap();
-                    let _ = db_guard.upsert_file_state(
-                        source_path.to_str().unwrap(),
-                        dest_path.to_str().unwrap(),
-                        0, // created
-                        ctime,
-                        mtime,
-                        permissions,
-                        None,
-                        size,
-                    );
-                    continue;
-                }
-            }
-        }
-
-        // Process File - reset progress bar for this file
+        // Reset progress bar for this file
         pb.set_length(size);
         pb.set_position(0);
         pb.set_message(format!(
-            "[Total: {}] {}",
+            "[{}/{} Total: {}] {}",
+            files_transferred + 1,
+            total_files,
             format_bytes(total_bytes_sent),
             relative_path.display()
         ));
-        let mut file = File::open(source_path)?;
+
+        let mut file = match File::open(&source_path) {
+            Ok(f) => f,
+            Err(e) => {
+                let _ = logger.log(&format!("Skipping (open error): {:?} - {}", source_path, e));
+                continue;
+            }
+        };
+
         let mut hasher = create_hasher(config.hash_algo);
         let mut offset = 0u64;
         let mut file_bytes_sent = 0u64;
@@ -203,7 +206,7 @@ pub fn run_producer(
                         data: vec![],
                         offset: 0,
                         dest_path: dest_path.clone(),
-                        source_path: source_path.to_path_buf(),
+                        source_path: source_path.clone(),
                         atime,
                         mtime,
                         ctime,
@@ -217,14 +220,14 @@ pub fn run_producer(
                 break;
             }
 
-            // Update byte counters
             total_bytes_sent += bytes_read as u64;
             file_bytes_sent += bytes_read as u64;
 
-            // Update progress bar position (per-file progress for ETA)
             pb.set_position(file_bytes_sent);
             pb.set_message(format!(
-                "[Total: {}] {}",
+                "[{}/{} Total: {}] {}",
+                files_transferred + 1,
+                total_files,
                 format_bytes(total_bytes_sent),
                 relative_path.display()
             ));
@@ -243,7 +246,7 @@ pub fn run_producer(
                 data: chunk_data,
                 offset,
                 dest_path: dest_path.clone(),
-                source_path: source_path.to_path_buf(),
+                source_path: source_path.clone(),
                 atime,
                 mtime,
                 ctime,
@@ -260,9 +263,13 @@ pub fn run_producer(
                 break;
             }
         }
+
+        files_transferred += 1;
     }
+
     pb.finish_with_message(format!(
-        "Finished. Total copied: {}",
+        "Finished. {} files transferred, {}",
+        files_transferred,
         format_bytes(total_bytes_sent)
     ));
     Ok(())
@@ -313,17 +320,11 @@ pub fn run_consumer(
             let atime = FileTime::from_unix_time(block.atime, 0);
             set_file_times(&block.dest_path, atime, mtime)?;
 
-            // Persistence
+            // Persistence - mark as synced with hash
             let db_guard = db.lock().unwrap();
-            db_guard.upsert_file_state(
+            db_guard.mark_synced(
                 block.source_path.to_str().unwrap(),
-                block.dest_path.to_str().unwrap(),
-                0, // created
-                block.ctime,
-                block.mtime,
-                block.permissions,
-                block.file_hash.as_deref(),
-                block.file_size,
+                block.file_hash.as_deref().unwrap_or(""),
             )?;
 
             // Audit

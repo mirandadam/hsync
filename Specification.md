@@ -12,7 +12,7 @@ The standard tools `rsync` is unsuitable for this environment because it:
 
 1. **Wastes Bandwidth:** Operate synchronously (read-then-write) on mounted shares, resulting in inefficient "half-duplex" throughput.
 2. **Lacks Control:** Fail to strictly enforce bandwidth limits on kernel-buffered mounts, causing latency spikes for other users.
-3. **Stalls on Resume:** Require prohibitive "pre-scan" times to identify changed files before transferring data, making resumption slow and inefficient.
+3. **Blocks on Scan:** Require a full sequential scan before any transfer can begin.
 
 ### Environment
 
@@ -24,7 +24,8 @@ The standard tools `rsync` is unsuitable for this environment because it:
 A custom **Producer-Consumer** application is required to:
 
 - **Maximize Throughput:** Decouple read and write operations via a **FIFO queue** to ensure full-duplex streaming.
-- **Stateful Efficiency:** Utilize a **local SQLite database** to track file state, enabling immediate startup (no pre-scan) and efficient resumption.
+- **Stateful Efficiency:** Utilize a **local SQLite database** to track file state and maintain a transfer backlog, enabling efficient resumption without re-scanning.
+- **Parallel Scanning:** Scan source and destination directories in parallel to build the initial backlog quickly.
 - **Audit & Sync:** Perform on-the-fly checksum calculation for auditing and synchronize file timestamps (`mtime`/`atime`/`ctime`) while bypassing strict permission enforcement to avoid network share errors.
 
 ### Core Constraints
@@ -37,9 +38,29 @@ A custom **Producer-Consumer** application is required to:
 
 ## 2. Architectural Design
 
-The application will utilize a **Producer-Consumer (FIFO Queue)** architecture to decouple read operations from write operations.
+The application operates in two phases: a **Scan Phase** followed by a **Transfer Phase** using a **Producer-Consumer (FIFO Queue)** architecture.
 
-### 2.1. The Pipeline (Queue)
+### 2.1. Startup Behavior
+
+The application automatically determines its mode based on database state:
+
+1. **If database does not exist OR has no pending files:** Run full scan phase, then transfer phase.
+2. **If database exists AND has pending files:** Skip scan, resume transfer phase from backlog.
+
+After all transfers complete (backlog empty), the next run will perform a full rescan to detect new or changed files.
+
+### 2.2. Scan Phase
+
+- **Parallel Execution:** Source and destination directories are scanned in parallel (independent threads, not synchronized to each other).
+- **Progress Display:** Show scan progress with file counts during this phase.
+- **Database Population:**
+  - For each source file, record its metadata and determine if transfer is needed.
+  - Compare against destination filesystem to determine sync status.
+  - Files needing transfer are marked as `pending` in the database.
+  - Files already synced (destination exists with matching mtime) are marked as `synced`.
+- **Hash Preservation:** When updating file records, existing hash values are preserved if the file hasn't changed.
+
+### 2.3. The Pipeline (Queue)
 
 - **Structure:** A fixed-size FIFO queue (e.g., 20 slots).
 - **Block Definition:** Each entry in the queue contains:
@@ -54,19 +75,16 @@ The application will utilize a **Producer-Consumer (FIFO Queue)** architecture t
 | `IsLastBlock`     | Boolean flag                                             |
 | `FileHash`        | String (Populated only if `IsLastBlock` is `True`)       |
 
-### 2.2. The Reader (Producer)
+### 2.4. The Reader (Producer)
 
-- **Discovery:** Iterates through the Source directory structure.
-- **Skipping Logic:** Checks if the file exists at the Destination.
-  - If **Exists** AND **Mtime matches Source**: Skip file (do not read, do not add to queue).
-  - Otherwise: Begin processing.
+- **Source:** Reads files from the pending backlog in the database (not filesystem scan).
 - **Processing:**
-  - Reads the file in blocks (max 5MB).
+  - Reads each pending file in blocks (max 5MB).
   - Calculates the checksum incrementally while reading.
   - Feeds blocks into the queue.
   - On the final block of a file: Sets `IsLastBlock = True` and attaches the calculated `FileHash`.
 
-### 2.3. The Writer (Consumer)
+### 2.5. The Writer (Consumer)
 
 - **Operation:** Pops blocks from the queue.
 - **File Handling:**
@@ -75,7 +93,7 @@ The application will utilize a **Producer-Consumer (FIFO Queue)** architecture t
   - If `IsLastBlock == True`:
     1. Closes the file.
     2. **Metadata Sync:** Attempts to apply source `mtime` (Modification Time), `atime` (Access Time), and `ctime` (Change Time) to the destination file on disk. **Does not** apply permissions.
-    3. **Persistence:** Writes record to local database.
+    3. **Persistence:** Updates database record, marking file as `synced` and storing the hash.
     4. **Audit:** Writes entry to log file.
 
 ---
@@ -103,18 +121,21 @@ The application will utilize a **Producer-Consumer (FIFO Queue)** architecture t
 - **Location:** Database file path must be user-configurable.
 - **Schema:**
 
-| Field          | Description                               |
-|----------------|-------------------------------------------|
-| Source Path    | Full source path                          |
-| Dest Path      | Full destination path                     |
-| Created Date   | Source value                              |
-| Changed Date   | Source value                              |
-| Modified Date  | Source value                              |
-| Permissions    | Source values (stored for record only)    |
-| Hash           | Checksum                                  |
-| Size           | File size in bytes                        |
+| Field          | Description                                      |
+|----------------|--------------------------------------------------|
+| Source Path    | Full source path (primary key)                   |
+| Dest Path      | Full destination path                            |
+| Created Date   | Source value                                     |
+| Changed Date   | Source value                                     |
+| Modified Date  | Source value                                     |
+| Permissions    | Source values (stored for record only)           |
+| Hash           | Checksum (null until file is transferred)        |
+| Size           | File size in bytes                               |
+| Status         | `pending` (needs transfer) or `synced` (complete)|
 
-- **Skipped Files:** Database record is updated, but `Hash` field is left **null/blank**.
+- **Resume Logic:** On startup, if the database contains `pending` files, resume transferring from the backlog without re-scanning.
+- **Rescan Trigger:** If no `pending` files exist, perform a full scan to detect new or changed files.
+- **Hash Preservation:** When rescanning, preserve existing hash values for files that haven't changed.
 
 ### 3.4. Mirroring (Cleanup)
 
@@ -130,12 +151,13 @@ The application will utilize a **Producer-Consumer (FIFO Queue)** architecture t
 
 ### 4.1. Console Output
 
-- **Start-up:** Immediate execution (no pre-scan phase).
-- **Metrics:**
+- **Scan Phase:** Display progress showing files scanned and pending count.
+- **Transfer Phase Metrics:**
   - Current file name
   - Current bandwidth usage
   - ETA for the *current file*
   - Total data copied (session/global)
+- **Resume Feedback:** Indicate when resuming from existing backlog vs. performing fresh scan.
 
 ### 4.2. Logging
 
@@ -158,7 +180,7 @@ The tool must accept arguments/config for:
 | Bandwidth Limit    | Maximum transfer speed                       | `--bwlimit 20M`        |
 | Hash Algorithm     | Checksum algorithm to use                    | `--checksum sha256`    |
 | Mirror Mode        | Enable deletion of extra files (default: off)| `--delete-extras`      |
-| Rescan             | Force database update                        |                        |
+| Rescan             | Force full rescan, ignoring existing backlog | `--rescan`             |
 
 ---
 

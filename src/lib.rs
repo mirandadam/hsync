@@ -78,8 +78,9 @@ pub fn run(args: Args) -> Result<()> {
 
     let consumer_db = db.clone();
     let consumer_logger = logger.clone();
+    let bw_limit = config.bw_limit;
     let consumer_handle = thread::spawn(move || {
-        if let Err(e) = run_consumer(receiver, consumer_db, consumer_logger) {
+        if let Err(e) = run_consumer(receiver, consumer_db, consumer_logger, bw_limit) {
             eprintln!("Consumer error: {}", e);
         }
     });

@@ -95,25 +95,41 @@ fn create_hasher(algo: HashAlgorithm) -> Box<dyn DynDigest> {
     }
 }
 
+/// Formats byte count in human-readable form (e.g., "1.5 GB")
+fn format_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+    const TB: u64 = GB * 1024;
+
+    if bytes >= TB {
+        format!("{:.2} TB", bytes as f64 / TB as f64)
+    } else if bytes >= GB {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.2} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.2} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
+}
+
 pub fn run_producer(
     config: PipelineConfig,
     sender: Sender<Block>,
     db: std::sync::Arc<std::sync::Mutex<Database>>,
     logger: std::sync::Arc<Logger>,
 ) -> Result<()> {
-    let start_time = Instant::now();
     let mut total_bytes_sent = 0u64;
 
-    // Count total files and size for progress bar (optional but nice)
-    // For now, we'll just use a spinner or simple progress since walking twice is expensive on 200TB
-    // But we can track total bytes transferred.
-
-    let pb = ProgressBar::new_spinner();
+    // Per-file progress bar for ETA and bandwidth display
+    let pb = ProgressBar::new(0);
     pb.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.green} [{elapsed_precise}] {msg} ({bytes}/s)")?,
+        ProgressStyle::default_bar()
+            .template("{spinner:.green} {msg}\n[{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, ETA: {eta})")?
+            .progress_chars("=>-"),
     );
-    pb.set_message("Scanning...");
 
     for entry in WalkDir::new(&config.source_dir) {
         let entry = entry?;
@@ -164,11 +180,18 @@ pub fn run_producer(
             }
         }
 
-        // Process File
-        pb.set_message(format!("Processing: {:?}", relative_path));
+        // Process File - reset progress bar for this file
+        pb.set_length(size);
+        pb.set_position(0);
+        pb.set_message(format!(
+            "[Total: {}] {}",
+            format_bytes(total_bytes_sent),
+            relative_path.display()
+        ));
         let mut file = File::open(source_path)?;
         let mut hasher = create_hasher(config.hash_algo);
         let mut offset = 0u64;
+        let mut file_bytes_sent = 0u64;
         let mut buffer = vec![0u8; BLOCK_SIZE];
 
         loop {
@@ -194,20 +217,17 @@ pub fn run_producer(
                 break;
             }
 
-            // Rate Limiting
-            if let Some(limit) = config.bw_limit {
-                total_bytes_sent += bytes_read as u64;
-                let expected_duration =
-                    Duration::from_secs_f64(total_bytes_sent as f64 / limit as f64);
-                let elapsed = start_time.elapsed();
-                if expected_duration > elapsed {
-                    thread::sleep(expected_duration - elapsed);
-                }
-            } else {
-                total_bytes_sent += bytes_read as u64;
-            }
+            // Update byte counters
+            total_bytes_sent += bytes_read as u64;
+            file_bytes_sent += bytes_read as u64;
 
-            pb.set_position(total_bytes_sent);
+            // Update progress bar position (per-file progress for ETA)
+            pb.set_position(file_bytes_sent);
+            pb.set_message(format!(
+                "[Total: {}] {}",
+                format_bytes(total_bytes_sent),
+                relative_path.display()
+            ));
 
             let chunk_data = buffer[0..bytes_read].to_vec();
             hasher.update(&chunk_data);
@@ -241,7 +261,10 @@ pub fn run_producer(
             }
         }
     }
-    pb.finish_with_message("Producer finished.");
+    pb.finish_with_message(format!(
+        "Finished. Total copied: {}",
+        format_bytes(total_bytes_sent)
+    ));
     Ok(())
 }
 
@@ -249,7 +272,11 @@ pub fn run_consumer(
     receiver: Receiver<Block>,
     db: std::sync::Arc<std::sync::Mutex<Database>>,
     logger: std::sync::Arc<Logger>,
+    bw_limit: Option<u64>,
 ) -> Result<()> {
+    let start_time = Instant::now();
+    let mut total_bytes_written = 0u64;
+
     while let Ok(block) = receiver.recv() {
         if let Some(parent) = block.dest_path.parent() {
             fs::create_dir_all(parent)?;
@@ -267,6 +294,18 @@ pub fn run_consumer(
 
         file.seek(SeekFrom::Start(block.offset))?;
         file.write_all(&block.data)?;
+
+        // Rate Limiting on the write side to enable full-duplex streaming
+        let bytes_written = block.data.len() as u64;
+        total_bytes_written += bytes_written;
+        if let Some(limit) = bw_limit {
+            let expected_duration =
+                Duration::from_secs_f64(total_bytes_written as f64 / limit as f64);
+            let elapsed = start_time.elapsed();
+            if expected_duration > elapsed {
+                thread::sleep(expected_duration - elapsed);
+            }
+        }
 
         if block.is_last_block {
             // Metadata Sync

@@ -16,7 +16,8 @@ use std::time::Duration;
 use walkdir::WalkDir;
 
 /// Scan results from the destination directory
-type DestinationMap = HashMap<PathBuf, i64>; // relative path -> mtime
+/// Maps relative path to (mtime, size)
+type DestinationMap = HashMap<PathBuf, (i64, u64)>;
 
 /// Runs the parallel scan phase, populating the database with file states.
 /// Returns the number of files pending transfer.
@@ -104,7 +105,8 @@ fn scan_destination(dest_dir: &PathBuf, pb: &ProgressBar) -> Result<DestinationM
         if let Ok(relative) = path.strip_prefix(dest_dir) {
             if let Ok(metadata) = fs::metadata(path) {
                 let mtime = FileTime::from_last_modification_time(&metadata).unix_seconds();
-                dest_map.insert(relative.to_path_buf(), mtime);
+                let size = metadata.len();
+                dest_map.insert(relative.to_path_buf(), (mtime, size));
                 count += 1;
 
                 if count % 1000 == 0 {
@@ -163,9 +165,11 @@ fn scan_source_and_compare(
 
         let dest_path = dest_dir.join(&relative_path);
 
-        // Determine status: check if destination exists with matching mtime
+        // Determine status: check if destination exists with matching mtime and size
         let status = match dest_map.get(&relative_path) {
-            Some(&dest_mtime) if dest_mtime == mtime => FileStatus::Synced,
+            Some(&(dest_mtime, dest_size)) if dest_mtime == mtime && dest_size == size => {
+                FileStatus::Synced
+            }
             _ => {
                 pending += 1;
                 FileStatus::Pending

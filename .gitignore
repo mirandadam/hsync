@@ -1,5 +1,5 @@
 /target
-/hsync.db
-/hsync.log
+/test_hsync.db
+/test_hsync.log
 /test_source
 /test_dest

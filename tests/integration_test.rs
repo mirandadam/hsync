@@ -1,4 +1,5 @@
 use anyhow::Result;
+use filetime::FileTime;
 use hsync::{pipeline::HashAlgorithm, run, Args};
 use std::fs::{self, File};
 use std::io::Write;
@@ -120,6 +121,92 @@ fn test_integration_full_flow() -> Result<()> {
         rescan: true, // Force rescan to detect the change
     };
     run(args_bw)?;
+
+    // Cleanup
+    fs::remove_dir_all(source_dir)?;
+    fs::remove_dir_all(dest_dir)?;
+    fs::remove_file(db_path)?;
+    fs::remove_file(log_path)?;
+
+    Ok(())
+}
+
+/// Test that file is re-synced when size changes but mtime stays the same.
+/// This is an edge case that can occur if a file is modified and then
+/// the mtime is manually restored (or on some filesystems).
+#[test]
+fn test_size_change_without_mtime_change() -> Result<()> {
+    let source_dir = PathBuf::from("test_size_source");
+    let dest_dir = PathBuf::from("test_size_dest");
+    let db_path = "test_size.db";
+    let log_path = "test_size.log";
+
+    // Cleanup
+    if source_dir.exists() {
+        fs::remove_dir_all(&source_dir)?;
+    }
+    if dest_dir.exists() {
+        fs::remove_dir_all(&dest_dir)?;
+    }
+    if std::path::Path::new(db_path).exists() {
+        fs::remove_file(db_path)?;
+    }
+    if std::path::Path::new(log_path).exists() {
+        fs::remove_file(log_path)?;
+    }
+
+    fs::create_dir_all(&source_dir)?;
+
+    // Create initial file
+    let file_path = source_dir.join("testfile.txt");
+    {
+        let mut f = File::create(&file_path)?;
+        f.write_all(b"Original content")?;
+    }
+
+    // Get original mtime
+    let original_mtime = FileTime::from_last_modification_time(&fs::metadata(&file_path)?);
+
+    // First sync
+    let args = Args {
+        source: source_dir.clone(),
+        dest: dest_dir.clone(),
+        db: db_path.to_string(),
+        log: log_path.to_string(),
+        bwlimit: None,
+        checksum: HashAlgorithm::Sha256,
+        delete_extras: false,
+        rescan: false,
+    };
+    run(args.clone())?;
+
+    // Verify initial transfer
+    assert!(dest_dir.join("testfile.txt").exists());
+    assert_eq!(
+        fs::read_to_string(dest_dir.join("testfile.txt"))?,
+        "Original content"
+    );
+
+    // Modify file content (changes size), then restore original mtime
+    {
+        let mut f = File::create(&file_path)?;
+        f.write_all(b"New content with different size!")?;
+    }
+    // Restore original mtime - now size differs but mtime is the same
+    filetime::set_file_mtime(&file_path, original_mtime)?;
+
+    // Run sync with rescan to detect change
+    let args_rescan = Args {
+        rescan: true,
+        ..args.clone()
+    };
+    run(args_rescan)?;
+
+    // Verify the file was re-synced due to size difference
+    assert_eq!(
+        fs::read_to_string(dest_dir.join("testfile.txt"))?,
+        "New content with different size!"
+    );
 
     // Cleanup
     fs::remove_dir_all(source_dir)?;

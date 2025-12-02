@@ -111,7 +111,7 @@ After all transfers complete (backlog empty), the next run will perform a full r
 
 ### 3.2. File Skipping & Overwrite Strategy
 
-- **Skip Criteria:** Destination file exists **AND** destination `mtime` == source `mtime`.
+- **Skip Criteria:** Destination file exists **AND** destination `mtime` == source `mtime` **AND** destination `size` == source `size`.
 - **Overwrite:** If a file is not skipped, it is overwritten entirely.
 - **Partial Files:** No support for resuming mid-file. If a transfer is interrupted, the specific file being transferred is restarted from offset 0 on the next run.
 

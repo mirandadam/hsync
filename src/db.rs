@@ -79,12 +79,12 @@ impl Database {
         size: u64,
         status: FileStatus,
     ) -> Result<()> {
-        // Check if file exists with same mtime - if so, preserve hash
+        // Check if file exists with same mtime and size - if so, preserve hash
         let existing_hash: Option<String> = self
             .conn
             .query_row(
-                "SELECT hash FROM files WHERE source_path = ?1 AND modified_date = ?2",
-                params![source_path, modified],
+                "SELECT hash FROM files WHERE source_path = ?1 AND modified_date = ?2 AND size = ?3",
+                params![source_path, modified, size],
                 |row| row.get(0),
             )
             .ok()
@@ -249,7 +249,7 @@ mod tests {
         )?;
         db.mark_synced("/src/file1", "originalhash")?;
 
-        // Re-upsert with same mtime - hash should be preserved
+        // Re-upsert with same mtime and size - hash should be preserved
         db.upsert_file(
             "/src/file1",
             "/dest/file1",
@@ -257,7 +257,7 @@ mod tests {
             200,
             300, // Same mtime
             0o644,
-            1024,
+            1024, // Same size
             FileStatus::Synced,
         )?;
 
@@ -273,6 +273,34 @@ mod tests {
             400, // Different mtime
             0o644,
             1024,
+            FileStatus::Pending,
+        )?;
+
+        let hash = db.get_file_hash("/src/file1")?;
+        assert_eq!(hash, None);
+
+        // Re-insert and mark synced again
+        db.upsert_file(
+            "/src/file1",
+            "/dest/file1",
+            100,
+            200,
+            400,
+            0o644,
+            1024,
+            FileStatus::Pending,
+        )?;
+        db.mark_synced("/src/file1", "newhash")?;
+
+        // Re-upsert with different size - hash should be cleared
+        db.upsert_file(
+            "/src/file1",
+            "/dest/file1",
+            100,
+            200,
+            400, // Same mtime
+            0o644,
+            2048, // Different size
             FileStatus::Pending,
         )?;
 

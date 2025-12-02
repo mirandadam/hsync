@@ -156,6 +156,7 @@ After all transfers complete (backlog empty), the next run will perform a full r
   - Current file name
   - Current bandwidth usage
   - ETA for the *current file*
+  - ETA for the *entire backlog* (based on total pending bytes from scan)
   - Total data copied (session/global)
 - **Resume Feedback:** Indicate when resuming from existing backlog vs. performing fresh scan.
 

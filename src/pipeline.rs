@@ -113,6 +113,22 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// Formats a duration as human-readable time (e.g., "2h 15m 30s")
+fn format_duration(duration: Duration) -> String {
+    let secs = duration.as_secs();
+    if secs >= 3600 {
+        let hours = secs / 3600;
+        let mins = (secs % 3600) / 60;
+        format!("{}h {:02}m", hours, mins)
+    } else if secs >= 60 {
+        let mins = secs / 60;
+        let secs_rem = secs % 60;
+        format!("{}m {:02}s", mins, secs_rem)
+    } else {
+        format!("{}s", secs)
+    }
+}
+
 /// Producer that reads files from the database backlog (pending files).
 pub fn run_producer(
     config: PipelineConfig,
@@ -122,11 +138,15 @@ pub fn run_producer(
 ) -> Result<()> {
     let mut total_bytes_sent = 0u64;
     let mut files_transferred = 0u64;
+    let transfer_start = Instant::now();
 
-    // Get pending files from database
-    let pending_files = {
+    // Get pending files and total bytes from database
+    let (pending_files, total_pending_bytes) = {
         let db_guard = db.lock().unwrap();
-        db_guard.get_pending_files()?
+        (
+            db_guard.get_pending_files()?,
+            db_guard.pending_total_bytes()?,
+        )
     };
 
     let total_files = pending_files.len();
@@ -135,7 +155,11 @@ pub fn run_producer(
         return Ok(());
     }
 
-    println!("Transferring {} files...", total_files);
+    println!(
+        "Transferring {} files ({})...",
+        total_files,
+        format_bytes(total_pending_bytes)
+    );
 
     // Per-file progress bar for ETA and bandwidth display
     let pb = ProgressBar::new(0);
@@ -176,11 +200,31 @@ pub fn run_producer(
         // Reset progress bar for this file
         pb.set_length(size);
         pb.set_position(0);
+
+        // Calculate backlog ETA based on transfer rate so far
+        let backlog_eta = if total_bytes_sent > 0 {
+            let elapsed = transfer_start.elapsed();
+            let rate = total_bytes_sent as f64 / elapsed.as_secs_f64();
+            let remaining = total_pending_bytes.saturating_sub(total_bytes_sent);
+            if rate > 0.0 {
+                Some(Duration::from_secs_f64(remaining as f64 / rate))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let eta_str = backlog_eta
+            .map(|d| format!(" Backlog ETA: {}", format_duration(d)))
+            .unwrap_or_default();
+
         pb.set_message(format!(
-            "[{}/{} Total: {}] {}",
+            "[{}/{} Total: {}{}] {}",
             files_transferred + 1,
             total_files,
             format_bytes(total_bytes_sent),
+            eta_str,
             relative_path.display()
         ));
 
@@ -224,11 +268,29 @@ pub fn run_producer(
             file_bytes_sent += bytes_read as u64;
 
             pb.set_position(file_bytes_sent);
+
+            // Update backlog ETA during transfer
+            let backlog_eta = {
+                let elapsed = transfer_start.elapsed();
+                let rate = total_bytes_sent as f64 / elapsed.as_secs_f64();
+                let remaining = total_pending_bytes.saturating_sub(total_bytes_sent);
+                if rate > 0.0 {
+                    Some(Duration::from_secs_f64(remaining as f64 / rate))
+                } else {
+                    None
+                }
+            };
+
+            let eta_str = backlog_eta
+                .map(|d| format!(" Backlog ETA: {}", format_duration(d)))
+                .unwrap_or_default();
+
             pb.set_message(format!(
-                "[{}/{} Total: {}] {}",
+                "[{}/{} Total: {}{}] {}",
                 files_transferred + 1,
                 total_files,
                 format_bytes(total_bytes_sent),
+                eta_str,
                 relative_path.display()
             ));
 

@@ -64,6 +64,11 @@ impl Database {
             )",
             [],
         )?;
+        // Index on status for efficient pending queries (count, sum, list)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_files_status ON files(status)",
+            [],
+        )?;
         Ok(())
     }
 
@@ -127,6 +132,16 @@ impl Database {
             |row| row.get(0),
         )?;
         Ok(count as u64)
+    }
+
+    /// Get total bytes of all pending files in the backlog
+    pub fn pending_total_bytes(&self) -> Result<u64> {
+        let total: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(size), 0) FROM files WHERE status = 'pending'",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(total as u64)
     }
 
     /// Get all pending files (the backlog)
@@ -347,6 +362,50 @@ mod tests {
 
         let pending = db.get_pending_files()?;
         assert_eq!(pending.len(), 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_pending_total_bytes() -> Result<()> {
+        let db = Database::new(":memory:")?;
+
+        // Empty database should return 0
+        assert_eq!(db.pending_total_bytes()?, 0);
+
+        db.upsert_file(
+            "/src/file1",
+            "/dest/file1",
+            100,
+            200,
+            300,
+            0o644,
+            1024,
+            FileStatus::Pending,
+        )?;
+        db.upsert_file(
+            "/src/file2",
+            "/dest/file2",
+            100,
+            200,
+            300,
+            0o644,
+            2048,
+            FileStatus::Synced, // Should not be counted
+        )?;
+        db.upsert_file(
+            "/src/file3",
+            "/dest/file3",
+            100,
+            200,
+            300,
+            0o644,
+            512,
+            FileStatus::Pending,
+        )?;
+
+        // Only pending files: 1024 + 512 = 1536
+        assert_eq!(db.pending_total_bytes()?, 1536);
 
         Ok(())
     }

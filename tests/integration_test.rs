@@ -272,3 +272,85 @@ fn test_resume_from_backlog() -> Result<()> {
 
     Ok(())
 }
+
+/// Test that --rescan with an existing database performs a fresh filesystem scan.
+///
+/// This test exposes a bug where --rescan would:
+/// 1. Mark all existing DB records as pending
+/// 2. Check pending_count() which was now > 0
+/// 3. Skip the scan and enter "resume mode" with stale records
+///
+/// The correct behavior: --rescan should always perform a fresh filesystem scan,
+/// detecting new files that weren't in the database before.
+#[test]
+fn test_rescan_detects_new_files() -> Result<()> {
+    let source_dir = PathBuf::from("test_rescan_new_source");
+    let dest_dir = PathBuf::from("test_rescan_new_dest");
+    let db_path = "test_rescan_new.db";
+    let log_path = "test_rescan_new.log";
+
+    // Cleanup
+    if source_dir.exists() {
+        fs::remove_dir_all(&source_dir)?;
+    }
+    if dest_dir.exists() {
+        fs::remove_dir_all(&dest_dir)?;
+    }
+    if std::path::Path::new(db_path).exists() {
+        fs::remove_file(db_path)?;
+    }
+    if std::path::Path::new(log_path).exists() {
+        fs::remove_file(log_path)?;
+    }
+
+    fs::create_dir_all(&source_dir)?;
+
+    // Create initial file
+    let mut f1 = File::create(source_dir.join("file1.txt"))?;
+    f1.write_all(b"Content 1")?;
+
+    // First run - creates database with file1.txt
+    let args = Args {
+        source: source_dir.clone(),
+        dest: dest_dir.clone(),
+        db: db_path.to_string(),
+        log: log_path.to_string(),
+        bwlimit: None,
+        checksum: HashAlgorithm::Sha256,
+        delete_extras: false,
+        rescan: false,
+    };
+    run(args.clone())?;
+
+    assert!(dest_dir.join("file1.txt").exists());
+
+    // Add a NEW file to source (not in database yet)
+    let mut f2 = File::create(source_dir.join("file2_new.txt"))?;
+    f2.write_all(b"New file content")?;
+
+    // Run with --rescan: should perform fresh scan and detect the new file
+    // BUG (before fix): would skip scan because DB had records, missing the new file
+    let args_rescan = Args {
+        rescan: true,
+        ..args.clone()
+    };
+    run(args_rescan)?;
+
+    // The new file MUST be transferred - this would fail with the bug
+    assert!(
+        dest_dir.join("file2_new.txt").exists(),
+        "New file should be detected and transferred when using --rescan"
+    );
+    assert_eq!(
+        fs::read_to_string(dest_dir.join("file2_new.txt"))?,
+        "New file content"
+    );
+
+    // Cleanup
+    fs::remove_dir_all(source_dir)?;
+    fs::remove_dir_all(dest_dir)?;
+    fs::remove_file(db_path)?;
+    fs::remove_file(log_path)?;
+
+    Ok(())
+}

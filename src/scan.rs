@@ -47,38 +47,31 @@ pub fn run_scan(
     dest_pb.set_prefix("Destination");
     dest_pb.enable_steady_tick(Duration::from_millis(100));
 
-    // Scan destination first to build a lookup map
+    // Scan source and destination in parallel
     let dest_dir_clone = dest_dir.clone();
     let dest_pb_clone = dest_pb.clone();
     let dest_handle = thread::spawn(move || scan_destination(&dest_dir_clone, &dest_pb_clone));
 
-    // Scan source directory
     let source_dir_clone = source_dir.clone();
-    let dest_dir_clone = dest_dir.clone();
-    let db_clone = db.clone();
     let source_pb_clone = source_pb.clone();
+    let source_handle = thread::spawn(move || scan_source(&source_dir_clone, &source_pb_clone));
 
-    // Wait for destination scan to complete
+    // Wait for both scans to complete
     let dest_map = dest_handle.join().unwrap()?;
     dest_pb.finish_with_message(format!("{} files found", dest_map.len()));
 
-    // Now scan source and compare with destination
-    let (scanned, pending) = scan_source_and_compare(
-        &source_dir_clone,
-        &dest_dir_clone,
-        &dest_map,
-        &db_clone,
-        &source_pb_clone,
-    )?;
+    let source_map = source_handle.join().unwrap()?;
+    source_pb.finish_with_message(format!("{} files found", source_map.len()));
 
-    source_pb.finish_with_message(format!("{} files scanned, {} pending", scanned, pending));
+    // Compare and populate database
+    let pending = compare_and_populate(source_dir, dest_dir, &source_map, &dest_map, db)?;
 
     // Summary progress bar
     let summary_pb = multi_progress.add(ProgressBar::new_spinner());
     summary_pb.set_style(ProgressStyle::default_spinner().template("{msg}").unwrap());
     summary_pb.finish_with_message(format!(
         "Scan complete: {} source files, {} destination files, {} to transfer",
-        scanned,
+        source_map.len(),
         dest_map.len(),
         pending
     ));
@@ -86,7 +79,14 @@ pub fn run_scan(
     Ok(pending)
 }
 
-/// Scans the destination directory and returns a map of relative paths to mtimes.
+/// Source file metadata: (mtime, atime, size, permissions)
+type SourceFileInfo = (i64, i64, u64, u32);
+
+/// Scan results from the source directory
+/// Maps relative path to file metadata
+type SourceMap = HashMap<PathBuf, SourceFileInfo>;
+
+/// Scans the destination directory and returns a map of relative paths to (mtime, size).
 fn scan_destination(dest_dir: &PathBuf, pb: &ProgressBar) -> Result<DestinationMap> {
     let mut dest_map = HashMap::new();
     let mut count = 0u64;
@@ -120,17 +120,10 @@ fn scan_destination(dest_dir: &PathBuf, pb: &ProgressBar) -> Result<DestinationM
     Ok(dest_map)
 }
 
-/// Scans source directory, compares with destination, and populates the database.
-/// Returns (total_scanned, pending_count).
-fn scan_source_and_compare(
-    source_dir: &PathBuf,
-    dest_dir: &PathBuf,
-    dest_map: &DestinationMap,
-    db: &Arc<Mutex<Database>>,
-    pb: &ProgressBar,
-) -> Result<(u64, u64)> {
-    let mut scanned = 0u64;
-    let mut pending = 0u64;
+/// Scans source directory and returns a map of relative paths to file metadata.
+fn scan_source(source_dir: &PathBuf, pb: &ProgressBar) -> Result<SourceMap> {
+    let mut source_map = HashMap::new();
+    let mut count = 0u64;
 
     for entry in WalkDir::new(source_dir) {
         let entry = match entry {
@@ -155,7 +148,6 @@ fn scan_source_and_compare(
 
         let mtime = FileTime::from_last_modification_time(&metadata).unix_seconds();
         let atime = FileTime::from_last_access_time(&metadata).unix_seconds();
-        let ctime = mtime; // ctime fallback
         let size = metadata.len();
 
         #[cfg(unix)]
@@ -163,10 +155,36 @@ fn scan_source_and_compare(
         #[cfg(not(unix))]
         let permissions = 0u32;
 
-        let dest_path = dest_dir.join(&relative_path);
+        source_map.insert(relative_path, (mtime, atime, size, permissions));
+        count += 1;
+
+        if count % 1000 == 0 {
+            pb.set_message(format!("{} files scanned", count));
+        }
+    }
+
+    pb.set_message(format!("{} files scanned", count));
+    Ok(source_map)
+}
+
+/// Compares source and destination maps, populates the database.
+/// Returns the number of pending files.
+fn compare_and_populate(
+    source_dir: &PathBuf,
+    dest_dir: &PathBuf,
+    source_map: &SourceMap,
+    dest_map: &DestinationMap,
+    db: &Arc<Mutex<Database>>,
+) -> Result<u64> {
+    let mut pending = 0u64;
+
+    for (relative_path, &(mtime, atime, size, permissions)) in source_map {
+        let source_path = source_dir.join(relative_path);
+        let dest_path = dest_dir.join(relative_path);
+        let ctime = mtime; // ctime fallback
 
         // Determine status: check if destination exists with matching mtime and size
-        let status = match dest_map.get(&relative_path) {
+        let status = match dest_map.get(relative_path) {
             Some(&(dest_mtime, dest_size)) if dest_mtime == mtime && dest_size == size => {
                 FileStatus::Synced
             }
@@ -189,14 +207,9 @@ fn scan_source_and_compare(
             status,
         )?;
         drop(db_guard);
-
-        scanned += 1;
-        if scanned % 1000 == 0 {
-            pb.set_message(format!("{} files scanned, {} pending", scanned, pending));
-        }
     }
 
-    Ok((scanned, pending))
+    Ok(pending)
 }
 
 #[cfg(test)]

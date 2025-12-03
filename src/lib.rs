@@ -57,25 +57,24 @@ pub fn run(args: Args) -> Result<()> {
     let db = Arc::new(Mutex::new(Database::new(&args.db)?));
     let logger = Arc::new(Logger::new(&args.log));
 
-    // Handle forced rescan: reset status but preserve hashes
-    if args.rescan {
-        println!("Forcing full rescan...");
-        let db_guard = db.lock().unwrap();
-        db_guard.reset_for_rescan()?;
-        drop(db_guard);
-    }
-
     // Determine mode: resume from backlog or perform fresh scan
-    let pending_count = {
-        let db_guard = db.lock().unwrap();
-        db_guard.pending_count()?
+    let should_scan = if args.rescan {
+        println!("Forcing full rescan...");
+        true
+    } else {
+        let pending_count = {
+            let db_guard = db.lock().unwrap();
+            db_guard.pending_count()?
+        };
+        if pending_count > 0 {
+            println!("Resuming: {} files pending transfer.", pending_count);
+            false
+        } else {
+            true
+        }
     };
 
-    if pending_count > 0 {
-        // Resume mode: backlog exists
-        println!("Resuming: {} files pending transfer.", pending_count);
-    } else {
-        // Scan mode: no backlog, perform full scan
+    if should_scan {
         println!("Scanning source and destination directories...");
         let pending = run_scan(&args.source, &args.dest, &db)?;
 

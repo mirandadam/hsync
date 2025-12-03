@@ -205,14 +205,6 @@ impl Database {
             Ok(None)
         }
     }
-
-    /// Reset all files to pending status for a forced rescan.
-    /// Preserves existing records (including hashes) so they can be matched during scan.
-    pub fn reset_for_rescan(&self) -> Result<()> {
-        self.conn
-            .execute("UPDATE files SET status = 'pending'", [])?;
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -406,50 +398,6 @@ mod tests {
 
         // Only pending files: 1024 + 512 = 1536
         assert_eq!(db.pending_total_bytes()?, 1536);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_reset_for_rescan() -> Result<()> {
-        let db = Database::new(":memory:")?;
-
-        db.upsert_file(
-            "/src/file1",
-            "/dest/file1",
-            100,
-            200,
-            300,
-            0o644,
-            1024,
-            FileStatus::Pending,
-        )?;
-        db.upsert_file(
-            "/src/file2",
-            "/dest/file2",
-            100,
-            200,
-            300,
-            0o644,
-            2048,
-            FileStatus::Synced,
-        )?;
-        db.mark_synced("/src/file2", "preserved_hash")?;
-
-        assert!(db.has_records()?);
-        assert_eq!(db.pending_count()?, 1);
-
-        db.reset_for_rescan()?;
-
-        // Records still exist, all marked pending
-        assert!(db.has_records()?);
-        assert_eq!(db.pending_count()?, 2);
-
-        // Hash is preserved
-        assert_eq!(
-            db.get_file_hash("/src/file2")?,
-            Some("preserved_hash".to_string())
-        );
 
         Ok(())
     }

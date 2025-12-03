@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use clap::ValueEnum;
 use crossbeam_channel::{Receiver, Sender};
 use filetime::{set_file_times, FileTime};
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use md5::Md5;
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
@@ -93,10 +93,15 @@ fn create_hasher(algo: HashAlgorithm) -> Box<dyn DynDigest> {
     }
 }
 
-/// Formats a duration as human-readable time (e.g., "2h 15m 30s")
+/// Formats a duration as human-readable time (e.g., "1d 2h 10m", "2h 15m")
 fn format_duration(duration: Duration) -> String {
     let secs = duration.as_secs();
-    if secs >= 3600 {
+    if secs >= 86400 {
+        let days = secs / 86400;
+        let hours = (secs % 86400) / 3600;
+        let mins = (secs % 3600) / 60;
+        format!("{}d {}h {:02}m", days, hours, mins)
+    } else if secs >= 3600 {
         let hours = secs / 3600;
         let mins = (secs % 3600) / 60;
         format!("{}h {:02}m", hours, mins)
@@ -145,7 +150,13 @@ pub fn run_producer(
     let pb = ProgressBar::new(0);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("{spinner:.green} {msg}\n[{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, ETA: {eta})")?
+            .with_key(
+                "eta_formatted",
+                |state: &ProgressState, w: &mut dyn std::fmt::Write| {
+                    write!(w, "{}", format_duration(state.eta())).unwrap()
+                },
+            )
+            .template("{spinner:.green} {msg}\n[{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, ETA: {eta_formatted})")?
             .progress_chars("=>-"),
     );
 
@@ -403,6 +414,22 @@ mod tests {
         assert_eq!(
             h.finalize_hex(),
             "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+    }
+
+    #[test]
+    fn test_format_duration() {
+        assert_eq!(format_duration(Duration::from_secs(30)), "30s");
+        assert_eq!(format_duration(Duration::from_secs(65)), "1m 05s");
+        assert_eq!(format_duration(Duration::from_secs(3600)), "1h 00m");
+        assert_eq!(format_duration(Duration::from_secs(3665)), "1h 01m");
+        assert_eq!(
+            format_duration(Duration::from_secs(86400 + 7200 + 600)),
+            "1d 2h 10m"
+        );
+        assert_eq!(
+            format_duration(Duration::from_secs(3 * 86400 + 37 * 60)),
+            "3d 0h 37m"
         );
     }
 }

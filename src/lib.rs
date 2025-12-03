@@ -15,7 +15,7 @@ use cleanup::run_cleanup;
 use db::Database;
 use pipeline::{run_consumer, run_producer, Block, HashAlgorithm, PipelineConfig};
 use scan::run_scan;
-use utils::Logger;
+use utils::{parse_bandwidth, Logger};
 
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
@@ -36,9 +36,9 @@ pub struct Args {
     #[arg(long, default_value = "hsync.log")]
     pub log: String,
 
-    /// Maximum transfer speed in bytes per second (e.g., 20000000 for 20MB/s)
+    /// Maximum transfer speed (e.g., 20M, 512K, 1G, or raw bytes)
     #[arg(long)]
-    pub bwlimit: Option<u64>,
+    pub bwlimit: Option<String>,
 
     /// Checksum algorithm to use
     #[arg(long, value_enum, default_value_t = HashAlgorithm::Sha256)]
@@ -54,6 +54,13 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> Result<()> {
+    // Parse bandwidth limit if provided
+    let bw_limit = args
+        .bwlimit
+        .as_ref()
+        .map(|s| parse_bandwidth(s))
+        .transpose()?;
+
     let db = Arc::new(Mutex::new(Database::new(&args.db)?));
     let logger = Arc::new(Logger::new(&args.log));
 
@@ -84,7 +91,7 @@ pub fn run(args: Args) -> Result<()> {
                 let config = PipelineConfig {
                     source_dir: args.source.clone(),
                     dest_dir: args.dest.clone(),
-                    bw_limit: args.bwlimit,
+                    bw_limit,
                     db_path: args.db.clone(),
                     log_path: args.log.clone(),
                     hash_algo: args.checksum,
@@ -102,7 +109,7 @@ pub fn run(args: Args) -> Result<()> {
     let config = PipelineConfig {
         source_dir: args.source.clone(),
         dest_dir: args.dest.clone(),
-        bw_limit: args.bwlimit,
+        bw_limit,
         db_path: args.db.clone(),
         log_path: args.log.clone(),
         hash_algo: args.checksum,

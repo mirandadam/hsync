@@ -1,7 +1,41 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use chrono::Local;
 use std::fs::OpenOptions;
 use std::io::Write;
+
+/// Parses a human-readable bandwidth string (e.g., "20M", "512K") into bytes per second.
+/// Supports suffixes: K/k (1024), M/m (1024²), G/g (1024³). No suffix means bytes.
+pub fn parse_bandwidth(s: &str) -> Result<u64> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err(anyhow!("Bandwidth value cannot be empty"));
+    }
+
+    // Check if the last character is a suffix
+    let last_char = s.chars().last().unwrap();
+    let (num_str, multiplier) = match last_char {
+        'K' | 'k' => (&s[..s.len() - 1], 1024u64),
+        'M' | 'm' => (&s[..s.len() - 1], 1024u64 * 1024),
+        'G' | 'g' => (&s[..s.len() - 1], 1024u64 * 1024 * 1024),
+        _ => (s, 1u64),
+    };
+
+    let num: f64 = num_str
+        .trim()
+        .parse()
+        .map_err(|_| anyhow!("Invalid bandwidth value: '{}'", s))?;
+
+    if num < 0.0 {
+        return Err(anyhow!("Bandwidth value cannot be negative"));
+    }
+
+    let result = (num * multiplier as f64).round() as u64;
+    if result == 0 && num > 0.0 {
+        return Err(anyhow!("Bandwidth value too small"));
+    }
+
+    Ok(result)
+}
 
 /// Formats byte count in human-readable form (e.g., "1.5 GB")
 pub fn format_bytes(bytes: u64) -> String {
@@ -51,6 +85,40 @@ mod tests {
     use super::*;
     use std::fs;
     use std::io::Read;
+
+    #[test]
+    fn test_parse_bandwidth_with_suffixes() {
+        // Basic suffixes
+        assert_eq!(parse_bandwidth("1K").unwrap(), 1024);
+        assert_eq!(parse_bandwidth("1k").unwrap(), 1024);
+        assert_eq!(parse_bandwidth("1M").unwrap(), 1024 * 1024);
+        assert_eq!(parse_bandwidth("1m").unwrap(), 1024 * 1024);
+        assert_eq!(parse_bandwidth("1G").unwrap(), 1024 * 1024 * 1024);
+        assert_eq!(parse_bandwidth("1g").unwrap(), 1024 * 1024 * 1024);
+
+        // Larger values
+        assert_eq!(parse_bandwidth("20M").unwrap(), 20 * 1024 * 1024);
+        assert_eq!(parse_bandwidth("512K").unwrap(), 512 * 1024);
+
+        // Raw bytes (no suffix)
+        assert_eq!(parse_bandwidth("1000000").unwrap(), 1000000);
+        assert_eq!(parse_bandwidth("20000000").unwrap(), 20000000);
+
+        // Decimal values
+        assert_eq!(parse_bandwidth("1.5M").unwrap(), (1.5 * 1024.0 * 1024.0) as u64);
+        assert_eq!(parse_bandwidth("0.5G").unwrap(), (0.5 * 1024.0 * 1024.0 * 1024.0) as u64);
+
+        // Whitespace handling
+        assert_eq!(parse_bandwidth(" 10M ").unwrap(), 10 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_parse_bandwidth_errors() {
+        assert!(parse_bandwidth("").is_err());
+        assert!(parse_bandwidth("abc").is_err());
+        assert!(parse_bandwidth("M").is_err());
+        assert!(parse_bandwidth("-10M").is_err());
+    }
 
     #[test]
     fn test_logger() -> Result<()> {

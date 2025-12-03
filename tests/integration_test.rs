@@ -115,7 +115,7 @@ fn test_integration_full_flow() -> Result<()> {
         dest: dest_dir.clone(),
         db: db_path.to_string(),
         log: log_path.to_string(),
-        bwlimit: Some(1024 * 1024 * 10), // 10MB/s
+        bwlimit: Some("10M".to_string()), // 10MB/s
         checksum: HashAlgorithm::Sha256,
         delete_extras: false,
         rescan: true, // Force rescan to detect the change

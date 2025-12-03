@@ -16,7 +16,7 @@ A high-performance application designed to reliably migrate large datasets betwe
 cargo run --release -- \
   --source /path/to/source \
   --dest /path/to/destination \
-  --bwlimit 20000000
+  --bwlimit 20M
 ```
 
 ### Arguments
@@ -25,7 +25,12 @@ cargo run --release -- \
 - `--dest`: Path to destination directory.
 - `--db`: Local database file path (default: `hsync.db`).
 - `--log`: Audit log file path (default: `hsync.log`).
-- `--bwlimit`: Maximum transfer speed in bytes per second.
+- `--bwlimit`: Maximum transfer speed. Supports human-readable suffixes:
+  - `K` or `k`: Kilobytes (×1024)
+  - `M` or `m`: Megabytes (×1024²)
+  - `G` or `g`: Gigabytes (×1024³)
+  - No suffix: raw bytes per second
+  - Examples: `20M`, `512K`, `1.5G`, `20000000`
 
 ## Build
 

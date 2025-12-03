@@ -4,6 +4,7 @@
 //! that need to be transferred.
 
 use crate::db::{Database, FileStatus};
+use crate::utils::format_bytes;
 use anyhow::Result;
 use filetime::FileTime;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -57,11 +58,19 @@ pub fn run_scan(
     let source_handle = thread::spawn(move || scan_source(&source_dir_clone, &source_pb_clone));
 
     // Wait for both scans to complete
-    let dest_map = dest_handle.join().unwrap()?;
-    dest_pb.finish_with_message(format!("{} files found", dest_map.len()));
+    let (dest_map, dest_total_size) = dest_handle.join().unwrap()?;
+    dest_pb.finish_with_message(format!(
+        "{} files found ({})",
+        dest_map.len(),
+        format_bytes(dest_total_size)
+    ));
 
-    let source_map = source_handle.join().unwrap()?;
-    source_pb.finish_with_message(format!("{} files found", source_map.len()));
+    let (source_map, source_total_size) = source_handle.join().unwrap()?;
+    source_pb.finish_with_message(format!(
+        "{} files found ({})",
+        source_map.len(),
+        format_bytes(source_total_size)
+    ));
 
     // Compare and populate database
     let pending = compare_and_populate(source_dir, dest_dir, &source_map, &dest_map, db)?;
@@ -70,9 +79,11 @@ pub fn run_scan(
     let summary_pb = multi_progress.add(ProgressBar::new_spinner());
     summary_pb.set_style(ProgressStyle::default_spinner().template("{msg}").unwrap());
     summary_pb.finish_with_message(format!(
-        "Scan complete: {} source files, {} destination files, {} to transfer",
+        "Scan complete: {} source files ({}), {} destination files ({}), {} to transfer",
         source_map.len(),
+        format_bytes(source_total_size),
         dest_map.len(),
+        format_bytes(dest_total_size),
         pending
     ));
 
@@ -86,10 +97,12 @@ type SourceFileInfo = (i64, i64, u64, u32);
 /// Maps relative path to file metadata
 type SourceMap = HashMap<PathBuf, SourceFileInfo>;
 
-/// Scans the destination directory and returns a map of relative paths to (mtime, size).
-fn scan_destination(dest_dir: &PathBuf, pb: &ProgressBar) -> Result<DestinationMap> {
+/// Scans the destination directory and returns a map of relative paths to (mtime, size)
+/// along with the total size of all scanned files.
+fn scan_destination(dest_dir: &PathBuf, pb: &ProgressBar) -> Result<(DestinationMap, u64)> {
     let mut dest_map = HashMap::new();
     let mut count = 0u64;
+    let mut total_size = 0u64;
 
     for entry in WalkDir::new(dest_dir) {
         let entry = match entry {
@@ -108,22 +121,33 @@ fn scan_destination(dest_dir: &PathBuf, pb: &ProgressBar) -> Result<DestinationM
                 let size = metadata.len();
                 dest_map.insert(relative.to_path_buf(), (mtime, size));
                 count += 1;
+                total_size += size;
 
                 if count % 1000 == 0 {
-                    pb.set_message(format!("{} files scanned", count));
+                    pb.set_message(format!(
+                        "{} files scanned ({})",
+                        count,
+                        format_bytes(total_size)
+                    ));
                 }
             }
         }
     }
 
-    pb.set_message(format!("{} files scanned", count));
-    Ok(dest_map)
+    pb.set_message(format!(
+        "{} files scanned ({})",
+        count,
+        format_bytes(total_size)
+    ));
+    Ok((dest_map, total_size))
 }
 
-/// Scans source directory and returns a map of relative paths to file metadata.
-fn scan_source(source_dir: &PathBuf, pb: &ProgressBar) -> Result<SourceMap> {
+/// Scans source directory and returns a map of relative paths to file metadata
+/// along with the total size of all scanned files.
+fn scan_source(source_dir: &PathBuf, pb: &ProgressBar) -> Result<(SourceMap, u64)> {
     let mut source_map = HashMap::new();
     let mut count = 0u64;
+    let mut total_size = 0u64;
 
     for entry in WalkDir::new(source_dir) {
         let entry = match entry {
@@ -157,14 +181,23 @@ fn scan_source(source_dir: &PathBuf, pb: &ProgressBar) -> Result<SourceMap> {
 
         source_map.insert(relative_path, (mtime, atime, size, permissions));
         count += 1;
+        total_size += size;
 
         if count % 1000 == 0 {
-            pb.set_message(format!("{} files scanned", count));
+            pb.set_message(format!(
+                "{} files scanned ({})",
+                count,
+                format_bytes(total_size)
+            ));
         }
     }
 
-    pb.set_message(format!("{} files scanned", count));
-    Ok(source_map)
+    pb.set_message(format!(
+        "{} files scanned ({})",
+        count,
+        format_bytes(total_size)
+    ));
+    Ok((source_map, total_size))
 }
 
 /// Compares source and destination maps, populates the database.

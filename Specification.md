@@ -52,7 +52,7 @@ After all transfers complete (backlog empty), the next run will perform a full r
 ### 2.2. Scan Phase
 
 - **Parallel Execution:** Source and destination directories are scanned in parallel (independent threads, not synchronized to each other).
-- **Progress Display:** Show scan progress with file counts during this phase.
+- **Progress Display:** Show scan progress with file counts and aggregate size (human-readable) during this phase.
 - **Database Population:**
   - For each source file, record its metadata and determine if transfer is needed.
   - Compare against destination filesystem to determine sync status.

@@ -264,6 +264,36 @@ pub fn run_producer(
                 break;
             }
 
+            let chunk_data = buffer[0..bytes_read].to_vec();
+            hasher.update(&chunk_data);
+
+            let is_last = (offset + bytes_read as u64) == size;
+            let file_hash = if is_last {
+                Some(hasher.finalize_hex())
+            } else {
+                None
+            };
+
+            let block = Block {
+                data: chunk_data,
+                offset,
+                dest_path: dest_path.clone(),
+                source_path: source_path.clone(),
+                atime,
+                mtime,
+                ctime,
+                permissions,
+                is_last_block: is_last,
+                file_hash,
+                file_size: size,
+            };
+
+            // Send block first - this may block due to backpressure from the
+            // bandwidth-limited consumer. Update progress only after send
+            // completes so the displayed rate reflects the actual throttled speed.
+            sender.send(block).context("Failed to send block")?;
+            offset += bytes_read as u64;
+
             total_bytes_sent += bytes_read as u64;
             file_bytes_sent += bytes_read as u64;
 
@@ -293,33 +323,6 @@ pub fn run_producer(
                 eta_str,
                 relative_path.display()
             ));
-
-            let chunk_data = buffer[0..bytes_read].to_vec();
-            hasher.update(&chunk_data);
-
-            let is_last = (offset + bytes_read as u64) == size;
-            let file_hash = if is_last {
-                Some(hasher.finalize_hex())
-            } else {
-                None
-            };
-
-            let block = Block {
-                data: chunk_data,
-                offset,
-                dest_path: dest_path.clone(),
-                source_path: source_path.clone(),
-                atime,
-                mtime,
-                ctime,
-                permissions,
-                is_last_block: is_last,
-                file_hash,
-                file_size: size,
-            };
-
-            sender.send(block).context("Failed to send block")?;
-            offset += bytes_read as u64;
 
             if is_last {
                 break;

@@ -105,8 +105,14 @@ mod tests {
         assert_eq!(parse_bandwidth("20000000").unwrap(), 20000000);
 
         // Decimal values
-        assert_eq!(parse_bandwidth("1.5M").unwrap(), (1.5 * 1024.0 * 1024.0) as u64);
-        assert_eq!(parse_bandwidth("0.5G").unwrap(), (0.5 * 1024.0 * 1024.0 * 1024.0) as u64);
+        assert_eq!(
+            parse_bandwidth("1.5M").unwrap(),
+            (1.5 * 1024.0 * 1024.0) as u64
+        );
+        assert_eq!(
+            parse_bandwidth("0.5G").unwrap(),
+            (0.5 * 1024.0 * 1024.0 * 1024.0) as u64
+        );
 
         // Whitespace handling
         assert_eq!(parse_bandwidth(" 10M ").unwrap(), 10 * 1024 * 1024);

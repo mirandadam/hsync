@@ -49,6 +49,18 @@ impl Database {
         Ok(Self { conn })
     }
 
+    /// Begin a transaction for batch operations
+    pub fn begin_transaction(&self) -> Result<()> {
+        self.conn.execute("BEGIN TRANSACTION", [])?;
+        Ok(())
+    }
+
+    /// Commit the current transaction
+    pub fn commit_transaction(&self) -> Result<()> {
+        self.conn.execute("COMMIT", [])?;
+        Ok(())
+    }
+
     fn init(conn: &Connection) -> Result<()> {
         conn.execute(
             "CREATE TABLE IF NOT EXISTS files (

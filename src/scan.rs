@@ -73,6 +73,7 @@ pub fn run_scan(
     ));
 
     // Compare and populate database
+    println!("Updating database...");
     let pending = compare_and_populate(source_dir, dest_dir, &source_map, &dest_map, db)?;
 
     // Summary progress bar
@@ -211,6 +212,10 @@ fn compare_and_populate(
 ) -> Result<u64> {
     let mut pending = 0u64;
 
+    // Hold lock for entire operation and use a single transaction for performance
+    let db_guard = db.lock().unwrap();
+    db_guard.begin_transaction()?;
+
     for (relative_path, &(mtime, atime, size, permissions)) in source_map {
         let source_path = source_dir.join(relative_path);
         let dest_path = dest_dir.join(relative_path);
@@ -227,8 +232,6 @@ fn compare_and_populate(
             }
         };
 
-        // Update database
-        let db_guard = db.lock().unwrap();
         db_guard.upsert_file(
             source_path.to_str().unwrap(),
             dest_path.to_str().unwrap(),
@@ -239,8 +242,10 @@ fn compare_and_populate(
             size,
             status,
         )?;
-        drop(db_guard);
     }
+
+    db_guard.commit_transaction()?;
+    drop(db_guard);
 
     Ok(pending)
 }

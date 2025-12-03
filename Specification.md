@@ -62,12 +62,12 @@ After all transfers complete (backlog empty), the next run will perform a full r
 
 ### 2.3. The Pipeline (Queue)
 
-- **Structure:** A fixed-size FIFO queue (e.g., 20 slots).
+- **Structure:** A FIFO queue (default 20 slots, configurable).
 - **Block Definition:** Each entry in the queue contains:
 
 | Field             | Description                                              |
 |-------------------|----------------------------------------------------------|
-| `Data`            | Byte buffer (Maximum **5MB**)                            |
+| `Data`            | Byte buffer (Default **5MB**, configurable)              |
 | `Offset`          | Integer indicating the write position in the destination file |
 | `DestinationPath` | Full path string                                         |
 | `Timestamps`      | Source `atime`, `mtime`, `ctime`                         |
@@ -79,7 +79,7 @@ After all transfers complete (backlog empty), the next run will perform a full r
 
 - **Source:** Reads files from the pending backlog in the database (not filesystem scan).
 - **Processing:**
-  - Reads each pending file in blocks (max 5MB).
+  - Reads each pending file in blocks (default 5MB).
   - Calculates the checksum incrementally while reading.
   - Feeds blocks into the queue.
   - On the final block of a file: Sets `IsLastBlock = True` and attaches the calculated `FileHash`.
@@ -182,6 +182,8 @@ The tool must accept arguments/config for:
 | Hash Algorithm     | Checksum algorithm to use                    | `--checksum sha256`    |
 | Mirror Mode        | Enable deletion of extra files (default: off)| `--delete-extras`      |
 | Rescan             | Force full rescan, ignoring existing backlog | `--rescan`             |
+| Block Size         | Size of transfer blocks (default: 5MB)       | `--block-size 1M`      |
+| Queue Capacity     | Size of the block queue (default: 20)        | `--queue-capacity 50`  |
 
 ---
 

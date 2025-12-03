@@ -51,6 +51,14 @@ pub struct Args {
     /// Force a full rescan, ignoring any existing backlog
     #[arg(long)]
     pub rescan: bool,
+
+    /// Block size for file transfer (e.g., 1M, 512K). Default: 5MB
+    #[arg(long)]
+    pub block_size: Option<String>,
+
+    /// Size of the block queue (queue capacity). Default: 20
+    #[arg(long)]
+    pub queue_capacity: Option<usize>,
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -60,6 +68,16 @@ pub fn run(args: Args) -> Result<()> {
         .as_ref()
         .map(|s| parse_bandwidth(s))
         .transpose()?;
+
+    // Parse block size if provided, default to 5MB
+    let block_size = if let Some(s) = &args.block_size {
+        parse_bandwidth(s)? as usize
+    } else {
+        5 * 1024 * 1024 // 5MB default
+    };
+
+    // Get queue capacity, default to 20
+    let queue_capacity = args.queue_capacity.unwrap_or(20);
 
     let db = Arc::new(Mutex::new(Database::new(&args.db)?));
     let logger = Arc::new(Logger::new(&args.log));
@@ -95,6 +113,7 @@ pub fn run(args: Args) -> Result<()> {
                     db_path: args.db.clone(),
                     log_path: args.log.clone(),
                     hash_algo: args.checksum,
+                    block_size,
                 };
                 run_cleanup(&config, &logger)?;
             }
@@ -104,7 +123,7 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     // Transfer phase: process the backlog
-    let (sender, receiver) = bounded::<Block>(20); // Fixed-size FIFO queue (20 slots)
+    let (sender, receiver) = bounded::<Block>(queue_capacity);
 
     let config = PipelineConfig {
         source_dir: args.source.clone(),
@@ -113,6 +132,7 @@ pub fn run(args: Args) -> Result<()> {
         db_path: args.db.clone(),
         log_path: args.log.clone(),
         hash_algo: args.checksum,
+        block_size,
     };
 
     let producer_db = db.clone();

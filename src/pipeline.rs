@@ -14,8 +14,6 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
-pub const BLOCK_SIZE: usize = 5 * 1024 * 1024; // 5MB
-
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum HashAlgorithm {
     Md5,
@@ -48,6 +46,7 @@ pub struct PipelineConfig {
     #[allow(dead_code)]
     pub log_path: String,
     pub hash_algo: HashAlgorithm,
+    pub block_size: usize,
 }
 
 trait DynDigest: Send {
@@ -226,11 +225,10 @@ pub fn run_producer(
                 continue;
             }
         };
-
         let mut hasher = create_hasher(config.hash_algo);
         let mut offset = 0u64;
         let mut file_bytes_sent = 0u64;
-        let mut buffer = vec![0u8; BLOCK_SIZE];
+        let mut buffer = vec![0u8; config.block_size];
 
         loop {
             let bytes_read = file.read(&mut buffer)?;

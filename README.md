@@ -31,6 +31,11 @@ cargo run --release -- \
   - `G` or `g`: Gigabytes (×1024³)
   - No suffix: raw bytes per second
   - Examples: `20M`, `512K`, `1.5G`, `20000000`
+- `--checksum`: Checksum algorithm to use (default: `sha256`). Supported values: `md5`, `sha1`, `sha256`.
+- `--delete-extras`: Enable deletion of extra files in destination.
+- `--rescan`: Force a full rescan, ignoring any existing backlog.
+- `--block-size`: Block size for file transfer (e.g., `1M`, `512K`). Default: `5MB`.
+- `--queue-capacity`: Size of the block queue. Default: `20`.
 
 ## Build
 

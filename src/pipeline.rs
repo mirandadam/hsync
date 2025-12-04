@@ -1,13 +1,14 @@
 use crate::db::Database;
 use crate::utils::{format_bytes, Logger};
 use anyhow::{Context, Result};
+use blake2::{Blake2b512, Digest as Blake2Digest};
 use clap::ValueEnum;
 use crossbeam_channel::{Receiver, Sender};
 use filetime::{set_file_times, FileTime};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use md5::Md5;
 use sha1::Sha1;
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
@@ -19,6 +20,7 @@ pub enum HashAlgorithm {
     Md5,
     Sha1,
     Sha256,
+    Blake2b,
 }
 
 #[derive(Debug)]
@@ -84,11 +86,22 @@ impl DynDigest for Sha256Wrapper {
     }
 }
 
+struct Blake2bWrapper(Blake2b512);
+impl DynDigest for Blake2bWrapper {
+    fn update(&mut self, data: &[u8]) {
+        Blake2Digest::update(&mut self.0, data);
+    }
+    fn finalize_hex(&self) -> String {
+        hex::encode(self.0.clone().finalize())
+    }
+}
+
 fn create_hasher(algo: HashAlgorithm) -> Box<dyn DynDigest> {
     match algo {
         HashAlgorithm::Md5 => Box::new(Md5Wrapper(Md5::new())),
         HashAlgorithm::Sha1 => Box::new(Sha1Wrapper(Sha1::new())),
         HashAlgorithm::Sha256 => Box::new(Sha256Wrapper(Sha256::new())),
+        HashAlgorithm::Blake2b => Box::new(Blake2bWrapper(Blake2b512::new())),
     }
 }
 
@@ -412,6 +425,13 @@ mod tests {
         assert_eq!(
             h.finalize_hex(),
             "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+
+        let mut h = create_hasher(HashAlgorithm::Blake2b);
+        h.update(b"hello");
+        assert_eq!(
+            h.finalize_hex(),
+            "e4cfa39a3d37be31c59609e807970799caa68a19bfaa15135f165085e01d41a65ba1e1b146aeb6bd0092b49eac214c103ccfa3a365954bbbe52f74a2b3620c94"
         );
     }
 

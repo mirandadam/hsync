@@ -48,6 +48,8 @@ fn test_integration_full_flow() -> Result<()> {
         checksum: HashAlgorithm::Sha256,
         delete_extras: false,
         rescan: false,
+        block_size: None,
+        queue_capacity: None,
     };
     run(args.clone())?;
 
@@ -87,6 +89,8 @@ fn test_integration_full_flow() -> Result<()> {
         checksum: HashAlgorithm::Sha256,
         delete_extras: true,
         rescan: false,
+        block_size: None,
+        queue_capacity: None,
     };
     run(args_mirror)?;
     assert!(!dest_dir.join("extra.txt").exists());
@@ -101,6 +105,8 @@ fn test_integration_full_flow() -> Result<()> {
         checksum: HashAlgorithm::Sha256,
         delete_extras: false,
         rescan: true,
+        block_size: None,
+        queue_capacity: None,
     };
     run(args_rescan)?;
 
@@ -119,6 +125,8 @@ fn test_integration_full_flow() -> Result<()> {
         checksum: HashAlgorithm::Sha256,
         delete_extras: false,
         rescan: true, // Force rescan to detect the change
+        block_size: None,
+        queue_capacity: None,
     };
     run(args_bw)?;
 
@@ -177,6 +185,8 @@ fn test_size_change_without_mtime_change() -> Result<()> {
         checksum: HashAlgorithm::Sha256,
         delete_extras: false,
         rescan: false,
+        block_size: None,
+        queue_capacity: None,
     };
     run(args.clone())?;
 
@@ -257,6 +267,8 @@ fn test_resume_from_backlog() -> Result<()> {
         checksum: HashAlgorithm::Sha256,
         delete_extras: false,
         rescan: false,
+        block_size: None,
+        queue_capacity: None,
     };
     run(args.clone())?;
 
@@ -319,6 +331,8 @@ fn test_rescan_detects_new_files() -> Result<()> {
         checksum: HashAlgorithm::Sha256,
         delete_extras: false,
         rescan: false,
+        block_size: None,
+        queue_capacity: None,
     };
     run(args.clone())?;
 

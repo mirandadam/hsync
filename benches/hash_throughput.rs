@@ -1,10 +1,11 @@
 // Benchmark for hash algorithm throughput.
 // Run with: cargo bench
 
+use blake2::{Blake2b512, Digest};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use md5::Md5;
 use sha1::Sha1;
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 
 fn bench_hashing(c: &mut Criterion) {
     // Test sizes: 1KB, 64KB, 1MB, 5MB (default block size)
@@ -42,6 +43,14 @@ fn bench_hashing(c: &mut Criterion) {
             b.iter(|| {
                 let mut hasher = Sha256::new();
                 hasher.update(data);
+                hasher.finalize()
+            })
+        });
+
+        group.bench_with_input(BenchmarkId::new("blake2b", label), &data, |b, data| {
+            b.iter(|| {
+                let mut hasher = Blake2b512::new();
+                Digest::update(&mut hasher, data);
                 hasher.finalize()
             })
         });

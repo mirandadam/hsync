@@ -106,7 +106,7 @@ After all transfers complete (backlog empty), the next run will perform a full r
 - **Bandwidth Limiting:** The tool must enforce a configurable speed limit (e.g., 20MB/s).
 - **Checksums:**
   - Computed on-the-fly during the read phase.
-  - **Algorithm:** User-configurable (MD5, SHA1, SHA256).
+  - **Algorithm:** User-configurable (MD5, SHA1, SHA256, BLAKE2b).
   - **Usage:** Stored in database/log for audit. **No read-back verification** is performed after writing.
 
 ### 3.2. File Skipping & Overwrite Strategy
@@ -202,7 +202,7 @@ The tool must accept arguments/config for:
 - A script (e.g., `coverage.sh`) must be provided to easily generate these reports.
 
 ### 6.3. Benchmarking
-- The project must include **throughput benchmarks** for the supported hash algorithms (MD5, SHA1, SHA256).
+- The project must include **throughput benchmarks** for the supported hash algorithms (MD5, SHA1, SHA256, BLAKE2b).
 - Benchmarks are implemented using Criterion and are run with `cargo bench`.
 - Benchmarks are separate from the production binary and do not affect the final tool.
 

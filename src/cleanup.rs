@@ -73,6 +73,7 @@ mod tests {
             db_path: "test_cleanup.db".to_string(),
             log_path: log_path.to_string(),
             hash_algo: HashAlgorithm::Sha256,
+            block_size: 5 * 1024 * 1024,
         };
         let logger = Logger::new(log_path);
 

@@ -20,6 +20,11 @@ hex = "0.4.3"
 
 [dev-dependencies]
 tempfile = "3.19"
+criterion = { version = "0.8", features = ["html_reports"] }
+
+[[bench]]
+name = "hash_throughput"
+harness = false
 
 [profile.release]
 lto = true

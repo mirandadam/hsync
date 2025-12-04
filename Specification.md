@@ -201,7 +201,12 @@ The tool must accept arguments/config for:
 - The project must include tooling to measure and report **code coverage**.
 - A script (e.g., `coverage.sh`) must be provided to easily generate these reports.
 
-### 6.3. Verification
+### 6.3. Benchmarking
+- The project must include **throughput benchmarks** for the supported hash algorithms (MD5, SHA1, SHA256).
+- Benchmarks are implemented using Criterion and are run with `cargo bench`.
+- Benchmarks are separate from the production binary and do not affect the final tool.
+
+### 6.4. Verification
 - A standalone verification script (e.g., `verify.sh`) must be provided to demonstrate the tool's functionality in a clean environment, performing:
   - Setup of test data.
   - Execution of the sync tool.

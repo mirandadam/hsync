@@ -4,7 +4,7 @@
 
 ### Objective
 
-Reliably migrate approximately **200TB** of data between two network-mounted storage systems (NFS/SMB) over a shared Gigabit Ethernet link, ensuring minimal impact on concurrent workloads.
+Reliably migrate approximately **200TiB** of data between two network-mounted storage systems (NFS/SMB) over a shared Gigabit Ethernet link, ensuring minimal impact on concurrent workloads.
 
 ### Current Limitations
 
@@ -67,7 +67,7 @@ After all transfers complete (backlog empty), the next run will perform a full r
 
 | Field             | Description                                              |
 |-------------------|----------------------------------------------------------|
-| `Data`            | Byte buffer (Default **5MB**, configurable)              |
+| `Data`            | Byte buffer (Default **5MiB**, configurable)             |
 | `Offset`          | Integer indicating the write position in the destination file |
 | `DestinationPath` | Full path string                                         |
 | `Timestamps`      | Source `atime`, `mtime`, `ctime`                         |
@@ -103,7 +103,7 @@ After all transfers complete (backlog empty), the next run will perform a full r
 ### 3.1. Transfer & Integrity
 
 - **Streaming:** Read and write operations must occur concurrently via the queue to ensure pipeline efficiency.
-- **Bandwidth Limiting:** The tool must enforce a configurable speed limit (e.g., 20MB/s).
+- **Bandwidth Limiting:** The tool must enforce a configurable speed limit (e.g., 20MiB/s).
 - **Checksums:**
   - Computed on-the-fly during the read phase.
   - **Algorithm:** User-configurable (MD5, SHA1, SHA256, BLAKE2b).
@@ -182,7 +182,7 @@ The tool must accept arguments/config for:
 | Hash Algorithm     | Checksum algorithm to use                    | `--checksum sha256`    |
 | Mirror Mode        | Enable deletion of extra files (default: off)| `--delete-extras`      |
 | Rescan             | Force full rescan, ignoring existing backlog | `--rescan`             |
-| Block Size         | Size of transfer blocks (default: 5MB)       | `--block-size 1M`      |
+| Block Size         | Size of transfer blocks (default: 5MiB)      | `--block-size 1M`      |
 | Queue Capacity     | Size of the block queue (default: 20)        | `--queue-capacity 50`  |
 
 ---
@@ -190,6 +190,7 @@ The tool must accept arguments/config for:
 ## 6. Quality Assurance & Tooling
 
 ### 6.1. Automated Testing
+
 - The project must include **automated integration tests** to verify core functionality, including:
   - Full synchronization flow.
   - File skipping logic.
@@ -198,15 +199,18 @@ The tool must accept arguments/config for:
   - Bandwidth limiting enforcement.
 
 ### 6.2. Code Coverage
+
 - The project must include tooling to measure and report **code coverage**.
 - A script (e.g., `coverage.sh`) must be provided to easily generate these reports.
 
 ### 6.3. Benchmarking
+
 - The project must include **throughput benchmarks** for the supported hash algorithms (MD5, SHA1, SHA256, BLAKE2b).
 - Benchmarks are implemented using Criterion and are run with `cargo bench`.
 - Benchmarks are separate from the production binary and do not affect the final tool.
 
 ### 6.4. Verification
+
 - A standalone verification script (e.g., `verify.sh`) must be provided to demonstrate the tool's functionality in a clean environment, performing:
   - Setup of test data.
   - Execution of the sync tool.

@@ -8,12 +8,12 @@ use sha1::Sha1;
 use sha2::Sha256;
 
 fn bench_hashing(c: &mut Criterion) {
-    // Test sizes: 1KB, 64KB, 1MB, 5MB (default block size)
+    // Test sizes: 1KiB, 64KiB, 1MiB, 5MiB (default block size)
     let sizes: [(usize, &str); 4] = [
-        (1024, "1KB"),
-        (64 * 1024, "64KB"),
-        (1024 * 1024, "1MB"),
-        (5 * 1024 * 1024, "5MB"),
+        (1024, "1KiB"),
+        (64 * 1024, "64KiB"),
+        (1024 * 1024, "1MiB"),
+        (5 * 1024 * 1024, "5MiB"),
     ];
 
     let mut group = c.benchmark_group("hash_throughput");

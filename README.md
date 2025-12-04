@@ -26,15 +26,15 @@ cargo run --release -- \
 - `--db`: Local database file path (default: `hsync.db`).
 - `--log`: Audit log file path (default: `hsync.log`).
 - `--bwlimit`: Maximum transfer speed. Supports human-readable suffixes:
-  - `K` or `k`: Kilobytes (×1024)
-  - `M` or `m`: Megabytes (×1024²)
-  - `G` or `g`: Gigabytes (×1024³)
+  - `K` or `k`: Kibibytes (×1024)
+  - `M` or `m`: Mebibytes (×1024²)
+  - `G` or `g`: Gibibytes (×1024³)
   - No suffix: raw bytes per second
   - Examples: `20M`, `512K`, `1.5G`, `20000000`
 - `--checksum`: Checksum algorithm to use (default: `sha256`). Supported values: `md5`, `sha1`, `sha256`, `blake2b`.
 - `--delete-extras`: Enable deletion of extra files in destination.
 - `--rescan`: Force a full rescan, ignoring any existing backlog.
-- `--block-size`: Block size for file transfer (e.g., `1M`, `512K`). Default: `5MB`.
+- `--block-size`: Block size for file transfer (e.g., `1M`, `512K`). Default: `5MiB`.
 - `--queue-capacity`: Size of the block queue. Default: `20`.
 
 ## Build
@@ -51,7 +51,7 @@ Run hash algorithm throughput benchmarks with:
 cargo bench
 ```
 
-This benchmarks MD5, SHA1, SHA256, and BLAKE2b at various block sizes (1KB, 64KB, 1MB, 5MB). Results are saved to `target/criterion/`.
+This benchmarks MD5, SHA1, SHA256, and BLAKE2b at various block sizes (1KiB, 64KiB, 1MiB, 5MiB). Results are saved to `target/criterion/`.
 
 ## Specification
 
@@ -61,10 +61,10 @@ This implementation adheres to the requirements defined in [Specification.md](Sp
 
 Licensed under either of
 
- * Apache License, Version 2.0
-   ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
- * MIT license
-   ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+- Apache License, Version 2.0
+   ([LICENSE-APACHE](LICENSE-APACHE) or <http://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license
+   ([LICENSE-MIT](LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
 
 at your option.
 

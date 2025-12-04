@@ -33,7 +33,7 @@ fn test_integration_full_flow() -> Result<()> {
     f1.write_all(b"Hello World")?;
 
     let mut f2 = File::create(source_dir.join("large.bin"))?;
-    f2.write_all(&vec![0u8; 1024 * 1024])?; // 1MB
+    f2.write_all(&vec![0u8; 1024 * 1024])?; // 1MiB
 
     // Empty file
     File::create(source_dir.join("empty.txt"))?;
@@ -121,7 +121,7 @@ fn test_integration_full_flow() -> Result<()> {
         dest: dest_dir.clone(),
         db: db_path.to_string(),
         log: log_path.to_string(),
-        bwlimit: Some("10M".to_string()), // 10MB/s
+        bwlimit: Some("10M".to_string()), // 10MiB/s
         checksum: HashAlgorithm::Sha256,
         delete_extras: false,
         rescan: true, // Force rescan to detect the change

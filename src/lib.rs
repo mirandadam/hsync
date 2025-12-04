@@ -52,7 +52,7 @@ pub struct Args {
     #[arg(long)]
     pub rescan: bool,
 
-    /// Block size for file transfer (e.g., 1M, 512K). Default: 5MB
+    /// Block size for file transfer (e.g., 1M, 512K). Default: 5MiB
     #[arg(long)]
     pub block_size: Option<String>,
 
@@ -69,7 +69,7 @@ pub fn run(args: Args) -> Result<()> {
         .map(|s| parse_bandwidth(s))
         .transpose()?;
 
-    // Parse block size if provided, default to 5MB
+    // Parse block size if provided, default to 5MiB
     let block_size = if let Some(s) = &args.block_size {
         parse_bandwidth(s)? as usize
     } else {

@@ -43,6 +43,16 @@ cargo run --release -- \
 cargo build --release
 ```
 
+## Benchmarks
+
+Run hash algorithm throughput benchmarks with:
+
+```bash
+cargo bench
+```
+
+This benchmarks MD5, SHA1, SHA256, and BLAKE2b at various block sizes (1KB, 64KB, 1MB, 5MB). Results are saved to `target/criterion/`.
+
 ## Specification
 
 This implementation adheres to the requirements defined in [Specification.md](Specification.md).

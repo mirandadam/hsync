@@ -184,6 +184,14 @@ pub fn run_producer(
         // Get fresh metadata from source (file may have changed since scan)
         let metadata = match fs::metadata(&source_path) {
             Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // File no longer exists in source - skip but don't remove from backlog
+                let _ = logger.log(&format!(
+                    "Skipping (source file no longer exists): {:?}",
+                    source_path
+                ));
+                continue;
+            }
             Err(e) => {
                 let _ = logger.log(&format!("Skipping (read error): {:?} - {}", source_path, e));
                 continue;
@@ -233,6 +241,14 @@ pub fn run_producer(
 
         let mut file = match File::open(&source_path) {
             Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // File no longer exists - skip but don't remove from backlog
+                let _ = logger.log(&format!(
+                    "Skipping (source file no longer exists): {:?}",
+                    source_path
+                ));
+                continue;
+            }
             Err(e) => {
                 let _ = logger.log(&format!("Skipping (open error): {:?} - {}", source_path, e));
                 continue;

@@ -96,6 +96,16 @@ After all transfers complete (backlog empty), the next run will perform a full r
     3. **Persistence:** Updates database record, marking file as `synced` and storing the hash.
     4. **Audit:** Writes entry to log file.
 
+### 2.6. Retry Behavior
+
+- **Transient Failures:** During the transfer phase, transient errors (read/write failures, channel disconnects) trigger automatic retries.
+- **Retry Configuration:**
+  - **Total Attempts:** Configurable (default 10), meaning 10 total attempts including the initial attempt.
+  - **Interval:** Fixed interval between attempts (default 60 seconds). No backoff or jitter.
+- **Mid-Transfer Errors:** If an error occurs during a file transfer, the transfer restarts from the beginning on retry.
+- **Logging:** Each retry attempt is logged to the audit log, including the attempt number and the error.
+- **Exhausted Retries:** If all retry attempts are exhausted, the program exits with a non-zero exit code and does not report success.
+
 ---
 
 ## 3. Functional Requirements
@@ -114,6 +124,7 @@ After all transfers complete (backlog empty), the next run will perform a full r
 - **Skip Criteria:** Destination file exists **AND** destination `mtime` == source `mtime` **AND** destination `size` == source `size`.
 - **Overwrite:** If a file is not skipped, it is overwritten entirely.
 - **Partial Files:** No support for resuming mid-file. If a transfer is interrupted, the specific file being transferred is restarted from offset 0 on the next run.
+- **Missing Source Files:** If a file in the database backlog no longer exists in the source filesystem, it is skipped (not an error). The file remains in the backlog and may be attempted again on later runs.
 
 ### 3.3. State Management (Resumability)
 
@@ -184,6 +195,8 @@ The tool must accept arguments/config for:
 | Rescan             | Force full rescan, ignoring existing backlog | `--rescan`             |
 | Block Size         | Size of transfer blocks (default: 5MiB)      | `--block-size 1M`      |
 | Queue Capacity     | Size of the block queue (default: 20)        | `--queue-capacity 50`  |
+| Retry Attempts     | Total attempts including initial (default: 10)| `--retry-attempts 5`   |
+| Retry Interval     | Seconds between retry attempts (default: 60) | `--retry-interval-seconds 30` |
 
 ---
 

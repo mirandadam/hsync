@@ -48,8 +48,10 @@ fn test_integration_full_flow() -> Result<()> {
         checksum: HashAlgorithm::Sha256,
         delete_extras: false,
         rescan: false,
-        block_size: None,
-        queue_capacity: None,
+        block_size: "5M".to_string(),
+        queue_capacity: 20,
+        retry_attempts: 10,
+        retry_interval_seconds: 60,
     };
     run(args.clone())?;
 
@@ -89,8 +91,10 @@ fn test_integration_full_flow() -> Result<()> {
         checksum: HashAlgorithm::Sha256,
         delete_extras: true,
         rescan: false,
-        block_size: None,
-        queue_capacity: None,
+        block_size: "5M".to_string(),
+        queue_capacity: 20,
+        retry_attempts: 10,
+        retry_interval_seconds: 60,
     };
     run(args_mirror)?;
     assert!(!dest_dir.join("extra.txt").exists());
@@ -105,8 +109,10 @@ fn test_integration_full_flow() -> Result<()> {
         checksum: HashAlgorithm::Sha256,
         delete_extras: false,
         rescan: true,
-        block_size: None,
-        queue_capacity: None,
+        block_size: "5M".to_string(),
+        queue_capacity: 20,
+        retry_attempts: 10,
+        retry_interval_seconds: 60,
     };
     run(args_rescan)?;
 
@@ -125,8 +131,10 @@ fn test_integration_full_flow() -> Result<()> {
         checksum: HashAlgorithm::Sha256,
         delete_extras: false,
         rescan: true, // Force rescan to detect the change
-        block_size: None,
-        queue_capacity: None,
+        block_size: "5M".to_string(),
+        queue_capacity: 20,
+        retry_attempts: 10,
+        retry_interval_seconds: 60,
     };
     run(args_bw)?;
 
@@ -185,8 +193,10 @@ fn test_size_change_without_mtime_change() -> Result<()> {
         checksum: HashAlgorithm::Sha256,
         delete_extras: false,
         rescan: false,
-        block_size: None,
-        queue_capacity: None,
+        block_size: "5M".to_string(),
+        queue_capacity: 20,
+        retry_attempts: 10,
+        retry_interval_seconds: 60,
     };
     run(args.clone())?;
 
@@ -267,8 +277,10 @@ fn test_resume_from_backlog() -> Result<()> {
         checksum: HashAlgorithm::Sha256,
         delete_extras: false,
         rescan: false,
-        block_size: None,
-        queue_capacity: None,
+        block_size: "5M".to_string(),
+        queue_capacity: 20,
+        retry_attempts: 10,
+        retry_interval_seconds: 60,
     };
     run(args.clone())?;
 
@@ -331,8 +343,10 @@ fn test_rescan_detects_new_files() -> Result<()> {
         checksum: HashAlgorithm::Sha256,
         delete_extras: false,
         rescan: false,
-        block_size: None,
-        queue_capacity: None,
+        block_size: "5M".to_string(),
+        queue_capacity: 20,
+        retry_attempts: 10,
+        retry_interval_seconds: 60,
     };
     run(args.clone())?;
 
@@ -358,6 +372,112 @@ fn test_rescan_detects_new_files() -> Result<()> {
     assert_eq!(
         fs::read_to_string(dest_dir.join("file2_new.txt"))?,
         "New file content"
+    );
+
+    // Cleanup
+    fs::remove_dir_all(source_dir)?;
+    fs::remove_dir_all(dest_dir)?;
+    fs::remove_file(db_path)?;
+    fs::remove_file(log_path)?;
+
+    Ok(())
+}
+
+/// Test that files missing from source are skipped during transfer
+/// and logged appropriately (not treated as errors).
+///
+/// This test simulates a scenario where:
+/// 1. Files are scanned and added to the pending backlog
+/// 2. The database is manipulated to add a "ghost" pending file
+/// 3. On resume, the ghost file (no longer in source) should be skipped
+#[test]
+fn test_missing_source_file_skipped() -> Result<()> {
+    use hsync::db::{Database, FileStatus};
+    use std::sync::{Arc, Mutex};
+
+    let source_dir = PathBuf::from("test_missing_source");
+    let dest_dir = PathBuf::from("test_missing_dest");
+    let db_path = "test_missing.db";
+    let log_path = "test_missing.log";
+
+    // Cleanup
+    if source_dir.exists() {
+        fs::remove_dir_all(&source_dir)?;
+    }
+    if dest_dir.exists() {
+        fs::remove_dir_all(&dest_dir)?;
+    }
+    if std::path::Path::new(db_path).exists() {
+        fs::remove_file(db_path)?;
+    }
+    if std::path::Path::new(log_path).exists() {
+        fs::remove_file(log_path)?;
+    }
+
+    fs::create_dir_all(&source_dir)?;
+    fs::create_dir_all(&dest_dir)?;
+
+    // Create one file
+    let mut f1 = File::create(source_dir.join("file1.txt"))?;
+    f1.write_all(b"File 1 content")?;
+
+    // Create database and manually add a pending file that doesn't exist
+    let db = Arc::new(Mutex::new(Database::new(db_path)?));
+    {
+        let db_guard = db.lock().unwrap();
+        // Add a real file
+        db_guard.upsert_file(
+            source_dir.join("file1.txt").to_str().unwrap(),
+            dest_dir.join("file1.txt").to_str().unwrap(),
+            0, // created
+            0, // changed
+            0, // modified
+            0o644,
+            14, // size
+            FileStatus::Pending,
+        )?;
+        // Add a "ghost" file that doesn't exist in source
+        db_guard.upsert_file(
+            source_dir.join("ghost_file.txt").to_str().unwrap(),
+            dest_dir.join("ghost_file.txt").to_str().unwrap(),
+            0, // created
+            0, // changed
+            0, // modified
+            0o644,
+            100, // size
+            FileStatus::Pending,
+        )?;
+    }
+    drop(db);
+
+    // Run with resume (database has pending files)
+    let args = Args {
+        source: source_dir.clone(),
+        dest: dest_dir.clone(),
+        db: db_path.to_string(),
+        log: log_path.to_string(),
+        bwlimit: None,
+        checksum: HashAlgorithm::Sha256,
+        delete_extras: false,
+        rescan: false, // Resume from backlog
+        block_size: "5M".to_string(),
+        queue_capacity: 20,
+        retry_attempts: 1,
+        retry_interval_seconds: 0,
+    };
+    run(args)?;
+
+    // file1 should be transferred
+    assert!(dest_dir.join("file1.txt").exists());
+    // ghost_file should NOT exist in dest (was skipped)
+    assert!(!dest_dir.join("ghost_file.txt").exists());
+
+    // Log should contain "source file no longer exists" message
+    let log_content = fs::read_to_string(log_path)?;
+    assert!(
+        log_content.contains("source file no longer exists"),
+        "Log should mention skipped file: {}",
+        log_content
     );
 
     // Cleanup

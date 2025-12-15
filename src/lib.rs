@@ -10,6 +10,7 @@ use crossbeam_channel::bounded;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use cleanup::run_cleanup;
 use db::Database;
@@ -52,13 +53,21 @@ pub struct Args {
     #[arg(long)]
     pub rescan: bool,
 
-    /// Block size for file transfer (e.g., 1M, 512K). Default: 5MiB
-    #[arg(long)]
-    pub block_size: Option<String>,
+    /// Block size for file transfer (e.g., 1M, 512K)
+    #[arg(long, default_value = "5M")]
+    pub block_size: String,
 
-    /// Size of the block queue (queue capacity). Default: 20
-    #[arg(long)]
-    pub queue_capacity: Option<usize>,
+    /// Number of block queue slots for pipeline buffering
+    #[arg(long, default_value_t = 20)]
+    pub queue_capacity: usize,
+
+    /// Total transfer attempts (including initial attempt)
+    #[arg(long, default_value_t = 10)]
+    pub retry_attempts: u32,
+
+    /// Seconds to wait between retry attempts
+    #[arg(long, default_value_t = 60)]
+    pub retry_interval_seconds: u64,
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -69,15 +78,10 @@ pub fn run(args: Args) -> Result<()> {
         .map(|s| parse_bandwidth(s))
         .transpose()?;
 
-    // Parse block size if provided, default to 5MiB
-    let block_size = if let Some(s) = &args.block_size {
-        parse_bandwidth(s)? as usize
-    } else {
-        5 * 1024 * 1024 // 5MB default
-    };
+    // Parse block size
+    let block_size = parse_bandwidth(&args.block_size)? as usize;
 
-    // Get queue capacity, default to 20
-    let queue_capacity = args.queue_capacity.unwrap_or(20);
+    let queue_capacity = args.queue_capacity;
 
     let db = Arc::new(Mutex::new(Database::new(&args.db)?));
     let logger = Arc::new(Logger::new(&args.log));
@@ -122,9 +126,7 @@ pub fn run(args: Args) -> Result<()> {
         }
     }
 
-    // Transfer phase: process the backlog
-    let (sender, receiver) = bounded::<Block>(queue_capacity);
-
+    // Transfer phase: process the backlog with retry logic
     let config = PipelineConfig {
         source_dir: args.source.clone(),
         dest_dir: args.dest.clone(),
@@ -135,26 +137,90 @@ pub fn run(args: Args) -> Result<()> {
         block_size,
     };
 
-    let producer_db = db.clone();
-    let producer_logger = logger.clone();
-    let producer_config = config.clone();
-    let producer_handle = thread::spawn(move || {
-        if let Err(e) = run_producer(producer_config, sender, producer_db, producer_logger) {
-            eprintln!("Producer error: {}", e);
-        }
-    });
+    let mut last_error: Option<anyhow::Error> = None;
 
-    let consumer_db = db.clone();
-    let consumer_logger = logger.clone();
-    let bw_limit = config.bw_limit;
-    let consumer_handle = thread::spawn(move || {
-        if let Err(e) = run_consumer(receiver, consumer_db, consumer_logger, bw_limit) {
-            eprintln!("Consumer error: {}", e);
-        }
-    });
+    for attempt in 1..=args.retry_attempts {
+        // Check if there are still pending files
+        let pending_count = {
+            let db_guard = db.lock().unwrap();
+            db_guard.pending_count()?
+        };
 
-    producer_handle.join().unwrap();
-    consumer_handle.join().unwrap();
+        if pending_count == 0 {
+            // All files transferred successfully
+            break;
+        }
+
+        if attempt > 1 {
+            // Log retry attempt
+            let msg = format!(
+                "Retry attempt {}/{}: {} (waiting {}s before retry)",
+                attempt,
+                args.retry_attempts,
+                last_error
+                    .as_ref()
+                    .map(|e| e.to_string())
+                    .unwrap_or_default(),
+                args.retry_interval_seconds
+            );
+            eprintln!("{}", msg);
+            let _ = logger.log(&msg);
+            thread::sleep(Duration::from_secs(args.retry_interval_seconds));
+        }
+
+        let (sender, receiver) = bounded::<Block>(queue_capacity);
+
+        let producer_db = db.clone();
+        let producer_logger = logger.clone();
+        let producer_config = config.clone();
+        let producer_handle = thread::spawn(move || -> Result<()> {
+            run_producer(producer_config, sender, producer_db, producer_logger)
+        });
+
+        let consumer_db = db.clone();
+        let consumer_logger = logger.clone();
+        let bw_limit = config.bw_limit;
+        let consumer_handle = thread::spawn(move || -> Result<()> {
+            run_consumer(receiver, consumer_db, consumer_logger, bw_limit)
+        });
+
+        let producer_result = producer_handle.join().unwrap();
+        let consumer_result = consumer_handle.join().unwrap();
+
+        // Check for errors from either thread
+        match (producer_result, consumer_result) {
+            (Ok(()), Ok(())) => {
+                last_error = None;
+            }
+            (Err(e), _) => {
+                last_error = Some(e);
+            }
+            (_, Err(e)) => {
+                last_error = Some(e);
+            }
+        }
+
+        if last_error.is_none() {
+            break;
+        }
+    }
+
+    // Check if retries were exhausted with an error
+    if let Some(e) = last_error {
+        let pending_count = {
+            let db_guard = db.lock().unwrap();
+            db_guard.pending_count()?
+        };
+        if pending_count > 0 {
+            let msg = format!(
+                "Transfer failed after {} attempts: {}",
+                args.retry_attempts, e
+            );
+            eprintln!("{}", msg);
+            let _ = logger.log(&msg);
+            return Err(anyhow::anyhow!(msg));
+        }
+    }
 
     if args.delete_extras {
         run_cleanup(&config, &logger)?;
